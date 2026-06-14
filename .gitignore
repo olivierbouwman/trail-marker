@@ -1,0 +1,12 @@
+# Build artifact (produced by build.sh)
+TrailMarker.asi
+
+# Runtime output
+*.bin
+*.log
+
+# IDE
+.idea/
+
+# Claude Code local config
+.claude/
