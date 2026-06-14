@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Trail Marker — Viewer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  html, body { margin: 0; height: 100%; background: #11140f; font-family: system-ui, sans-serif; }
+  #map { position: absolute; inset: 0; background: #11140f; }
+  #panel {
+    position: absolute; top: 12px; left: 12px; z-index: 1000;
+    background: rgba(20,22,16,.88); color: #e8e2d0; padding: 12px 14px;
+    border: 1px solid #6b5d3e; border-radius: 6px; font-size: 13px; max-width: 280px;
+  }
+  #panel h1 { font-size: 15px; margin: 0 0 6px; letter-spacing: .04em; }
+  #panel .hint { color: #b3a982; }
+  #stats { margin-top: 8px; line-height: 1.5; }
+  #click { margin-top: 8px; padding-top: 8px; border-top: 1px solid #4a4128; color: #d8e0b0; font-family: ui-monospace, monospace; font-size: 12px; }
+  #legend { margin-top: 8px; padding-top: 8px; border-top: 1px solid #4a4128; display: none; }
+  #legend span { display: inline-block; margin: 2px 6px 2px 0; }
+  #legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: middle; margin-right: 3px; }
+  #drop { position: absolute; inset: 0; z-index: 1500; display: none; background: rgba(10,12,8,.7);
+    color: #ffe; align-items: center; justify-content: center; font-size: 22px; border: 3px dashed #c9b277; pointer-events: none; }
+  #drop.show { display: flex; }
+  .leaflet-container { background: #11140f; }
+  #hover {
+    position: absolute; z-index: 1200; display: none; pointer-events: none;
+    background: rgba(20,22,16,.94); color: #e8e2d0; border: 1px solid #6b5d3e;
+    border-radius: 5px; padding: 7px 9px; font-size: 12px; line-height: 1.45;
+    font-family: ui-monospace, monospace; max-width: 240px;
+  }
+  #hover b { color: #e8c25a; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h1>🤠 Trail Marker</h1>
+  <div class="hint">Drag a <code>TrailMarker.bin</code> onto the page, or:</div>
+  <input id="file" type="file" accept=".bin" />
+  <div style="margin-top:8px;">Color by:
+    <select id="colormode">
+      <option value="transport">Transport</option>
+      <option value="honor">Honor</option>
+      <option value="cash">Money</option>
+      <option value="bounty">Bounty</option>
+      <option value="combat">Combat</option>
+    </select>
+  </div>
+  <div style="margin-top:6px;">
+    <label><input type="checkbox" id="f-cutscene"> hide cutscenes</label><br>
+    <label><input type="checkbox" id="f-orphan"> hide post-reload branches</label>
+  </div>
+  <div id="stats"></div>
+  <div id="legend"></div>
+  <div id="click">Click the map to read a position →</div>
+</div>
+<div id="drop">Drop TrailMarker.bin to load</div>
+<div id="hover"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// --- Game-world -> map (Leaflet CRS.Simple) transform -------------------------
+// Best-estimate, isotropic linear map. Tune from a known click (see #click readout).
+// Affine game->map fit (least-squares over 4 ground-truth points spanning the map:
+// Annesburg lighthouse+dock, Emerald Station, Saint Denis). Isotropic to within 0.9%,
+// max residual ~0.26 map-units. lat from game Y (north), lng from game X (east).
+const CAL = { ay: 0.01539, by: -63.684, cx: 0.01554, dx: 111.355 };
+const gameToLatLng = (x, y) => [ CAL.ay * y + CAL.by, CAL.cx * x + CAL.dx ];
+const latLngToGame = (lat, lng) => [ (lng - CAL.dx) / CAL.cx, (lat - CAL.by) / CAL.ay ];
+
+// --- Transport palette --------------------------------------------------------
+const T = {
+  0: ['foot',    '#9aa0a6'], 1: ['horse',   '#c8924a'], 2: ['boat',    '#3d8bd4'],
+  3: ['train',   '#c0c4cc'], 4: ['balloon', '#b06bd6'], 5: ['swim',    '#36cfd0'],
+  6: ['other',   '#e0863a'],
+};
+const F_SEGMENT_START = 0x20, F_DEAD = 0x10;
+const FLAG_NAMES = ['non-gameplay', 'keepalive', 'combat', 'wanted', 'dead', 'segment_start', 'orphaned'];
+const flagNames = f => FLAG_NAMES.filter((_, i) => f & (1 << i)).join(', ') || 'none';
+
+// In-game time: seconds since in-game 1800-01-01 -> "YYYY-MM-DD HH:MM"
+function daysFromCivil(y, m, d) {
+  y -= m <= 2 ? 1 : 0;
+  const era = Math.floor((y >= 0 ? y : y - 399) / 400), yoe = y - era * 400;
+  const doy = Math.floor((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1;
+  return era * 146097 + (yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy) - 719468;
+}
+function civilFromDays(z) {
+  z += 719468;
+  const era = Math.floor((z >= 0 ? z : z - 146096) / 146097), doe = z - era * 146097;
+  const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365);
+  const y = yoe + era * 400, doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+  const mp = Math.floor((5 * doy + 2) / 153), d = doy - Math.floor((153 * mp + 2) / 5) + 1, m = mp < 10 ? mp + 3 : mp - 9;
+  return [y + (m <= 2 ? 1 : 0), m, d];
+}
+const DAYS_1800 = daysFromCivil(1800, 1, 1);
+const p2 = n => String(n).padStart(2, '0');
+function fmtTime(t) {
+  const [y, m, d] = civilFromDays(Math.floor(t / 86400) + DAYS_1800), sod = t % 86400;
+  return `${y}-${p2(m)}-${p2(d)} ${p2(Math.floor(sod / 3600))}:${p2(Math.floor(sod % 3600 / 60))}`;
+}
+
+// --- Coloring modes -----------------------------------------------------------
+function dataRanges(recs) {
+  const R = { hMin: 1e9, hMax: -1e9, cMin: 1e9, cMax: -1e9, bMin: 1e9, bMax: -1e9 };
+  for (const r of recs) {
+    R.hMin = Math.min(R.hMin, r.honor); R.hMax = Math.max(R.hMax, r.honor);
+    R.cMin = Math.min(R.cMin, r.cash);  R.cMax = Math.max(R.cMax, r.cash);
+    R.bMin = Math.min(R.bMin, r.bounty); R.bMax = Math.max(R.bMax, r.bounty);
+  }
+  return R;
+}
+const qnorm = (v, min, max) => max <= min ? 0.5 : Math.round((v - min) / (max - min) * 24) / 24; // quantized 0..1
+const ramp = (t, h0, h1) => `hsl(${(h0 + (h1 - h0) * t).toFixed(0)},72%,52%)`;
+function colorOf(r, mode, R) {
+  switch (mode) {
+    case 'honor':  return ramp(qnorm(r.honor, R.hMin, R.hMax), 0, 120);   // red (low) -> green (high)
+    case 'cash':   return ramp(qnorm(r.cash, R.cMin, R.cMax), 210, 0);    // blue (low) -> red (high)
+    case 'bounty': return ramp(qnorm(r.bounty, R.bMin, R.bMax), 120, 0);  // green (low) -> red (high)
+    case 'combat': return (r.flags & 0x04) ? '#ff3b3b' : '#5a6b3a';
+    default:       return (T[r.transport] || ['', '#fff'])[1];            // transport
+  }
+}
+function renderLegend(mode, seenT, R) {
+  const lg = document.getElementById('legend');
+  if (mode === 'transport')
+    lg.innerHTML = [...seenT].sort((a, b) => a - b).map(t => `<span><i style="background:${(T[t] || ['', '#fff'])[1]}"></i>${(T[t] || ['?'])[0]}</span>`).join('');
+  else if (mode === 'combat')
+    lg.innerHTML = `<span><i style="background:#ff3b3b"></i>in combat</span> <span><i style="background:#5a6b3a"></i>peaceful</span>`;
+  else {
+    const [lo, hi, h0, h1, label] = mode === 'honor' ? [R.hMin, R.hMax, 0, 120, 'honor']
+      : mode === 'cash' ? [R.cMin, R.cMax, 210, 0, 'cash $'] : [R.bMin, R.bMax, 120, 0, 'bounty $'];
+    const grad = `linear-gradient(to right, ${ramp(0, h0, h1)}, ${ramp(.5, h0, h1)}, ${ramp(1, h0, h1)})`;
+    lg.innerHTML = `${label}: ${lo} <span style="display:inline-block;width:90px;height:11px;border-radius:2px;vertical-align:middle;background:${grad}"></span> ${hi}`;
+  }
+  lg.style.display = 'block';
+}
+
+// --- Map ----------------------------------------------------------------------
+const mapBounds = L.latLngBounds(L.latLng(-144, 0), L.latLng(0, 176));
+const map = L.map('map', { crs: L.CRS.Simple, minZoom: 2, maxZoom: 7 });
+L.tileLayer('https://s.rsg.sc/sc/images/games/RDR2/map/game/{z}/{x}/{y}.jpg', {
+  minZoom: 2, maxZoom: 7, bounds: mapBounds, noWrap: true,
+  attribution: 'Map © <a href="https://www.rockstargames.com/">Rockstar Games</a> · tiles via Jean Ropke'
+}).addTo(map);
+map.setView([-72, 88], 3);
+
+let lastData = null, pathLayer = null, hoverPts = [];
+
+// --- Binary parsing -----------------------------------------------------------
+function parseBin(buf) {
+  const dv = new DataView(buf);
+  const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+  if (magic !== 'R2GP') throw new Error('Not a Trail Marker file (bad magic "' + magic + '")');
+  const version = dv.getUint16(4, true), recordSize = dv.getUint16(6, true);
+  const recs = [];
+  for (let off = 8; off + recordSize <= buf.byteLength; off += recordSize) {
+    recs.push({
+      t: dv.getUint32(off, true),
+      x: dv.getInt16(off + 4, true) / 2, y: dv.getInt16(off + 6, true) / 2, z: dv.getInt16(off + 8, true) / 2,
+      transport: dv.getUint8(off + 10), flags: dv.getUint8(off + 11),
+      honor: dv.getInt8(off + 12), character: dv.getUint8(off + 13),
+      cash: dv.getUint32(off + 14, true), bounty: recordSize >= 20 ? dv.getUint16(off + 18, true) : 0,
+    });
+  }
+  return { version, recordSize, recs };
+}
+
+// --- Render: one polyline per transport-run, split across sessions ------------
+// Records abandoned by a later savegame load: at each segment_start (a load/launch) with
+// in-game time T, the contiguous run of prior records with time > T is the abandoned future.
+// (Deaths also rewind time but carry no segment_start, so respawns are never orphaned.)
+function computeOrphans(recs) {
+  const orph = new Array(recs.length).fill(false);
+  for (let i = 1; i < recs.length; i++) {
+    if (recs[i].flags & F_SEGMENT_START) {
+      const T = recs[i].t;
+      for (let j = i - 1; j >= 0 && !orph[j]; j--) {
+        if (recs[j].t > T) orph[j] = true; else break; // reached the branch point
+      }
+    }
+  }
+  return orph;
+}
+
+function render(data, doFit) {
+  lastData = data;
+  if (pathLayer) { map.removeLayer(pathLayer); pathLayer = null; }
+  const { recs, version } = data;
+  const mode = document.getElementById('colormode').value;
+  const R = dataRanges(recs);
+  const exCut = document.getElementById('f-cutscene').checked;
+  const orph = document.getElementById('f-orphan').checked ? computeOrphans(recs) : null;
+
+  const lines = [], deaths = [];
+  hoverPts = [];
+  let run = [], runC = null, prevLL = null, kept = 0;
+  const flush = () => { if (run.length > 1) lines.push(L.polyline(run, { color: runC, weight: 2.4, opacity: .92 })); };
+  const seenT = new Set();
+  for (let i = 0; i < recs.length; i++) {
+    const r = recs[i];
+    if ((exCut && (r.flags & 0x01)) || (orph && orph[i])) { flush(); run = []; runC = null; prevLL = null; continue; }
+    const ll = gameToLatLng(r.x, r.y);
+    const col = colorOf(r, mode, R);
+    if (r.flags & F_SEGMENT_START) { flush(); run = [ll]; runC = col; }     // new session: don't connect
+    else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; } // color change: connect
+    else run.push(ll);
+    if (r.flags & F_DEAD) deaths.push(L.circleMarker(ll, { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85 }).bindTooltip('💀 died here'));
+    hoverPts.push({ lat: ll[0], lng: ll[1], r });
+    prevLL = ll; seenT.add(r.transport); kept++;
+  }
+  flush();
+  pathLayer = L.layerGroup([...lines, ...deaths]).addTo(map);
+
+  if (doFit && hoverPts.length) map.fitBounds(L.latLngBounds(hoverPts.map(p => [p.lat, p.lng])), { padding: [40, 40], maxZoom: 6 });
+
+  const sessions = recs.filter(r => r.flags & F_SEGMENT_START).length || (recs.length ? 1 : 0);
+  const last = recs[recs.length - 1];
+  document.getElementById('stats').innerHTML =
+    `<b>${kept.toLocaleString()}</b>/${recs.length.toLocaleString()} pts · <b>${sessions}</b> session(s) · <b>${deaths.length}</b> 💀 · v${version}<br>` +
+    (last ? `last point: game (${last.x.toFixed(0)}, ${last.y.toFixed(0)})` : '');
+  renderLegend(mode, seenT, R);
+}
+
+// --- Click readout (for calibration) ------------------------------------------
+map.on('click', e => {
+  const { lat, lng } = e.latlng;
+  const [gx, gy] = latLngToGame(lat, lng);
+  document.getElementById('click').innerHTML =
+    `clicked: latLng(${lat.toFixed(2)}, ${lng.toFixed(2)})<br>` +
+    `≈ game (${gx.toFixed(0)}, ${gy.toFixed(0)}) <span class="hint">(per current calibration)</span>`;
+});
+
+// --- Hover: show the nearest recorded point's details -------------------------
+const CHARS = ['Arthur', 'John', 'other'];
+const hoverBox = document.getElementById('hover');
+let lastEvt = null, rafPending = false;
+map.on('mousemove', e => { lastEvt = e; if (!rafPending) { rafPending = true; requestAnimationFrame(showHover); } });
+map.on('mouseout', () => { hoverBox.style.display = 'none'; });
+function showHover() {
+  rafPending = false;
+  if (!lastEvt || !hoverPts.length) return;
+  const { lat, lng } = lastEvt.latlng;
+  let best = null, bestD = Infinity;
+  for (const p of hoverPts) { const dx = p.lng - lng, dy = p.lat - lat, d = dx * dx + dy * dy; if (d < bestD) { bestD = d; best = p; } }
+  if (!best || map.latLngToContainerPoint([best.lat, best.lng]).distanceTo(lastEvt.containerPoint) > 18) {
+    hoverBox.style.display = 'none'; return;
+  }
+  const r = best.r;
+  hoverBox.innerHTML =
+    `<b>${fmtTime(r.t)}</b><br>` +
+    `${(T[r.transport] || ['?'])[0]} · honor ${r.honor} · $${r.cash} · bounty $${r.bounty}<br>` +
+    `${CHARS[r.character] || 'char?'} · game (${r.x.toFixed(0)}, ${r.y.toFixed(0)})<br>` +
+    `flags: ${flagNames(r.flags)}`;
+  hoverBox.style.display = 'block';
+  hoverBox.style.left = (lastEvt.containerPoint.x + 14) + 'px';
+  hoverBox.style.top = (lastEvt.containerPoint.y + 14) + 'px';
+}
+
+// --- File loading -------------------------------------------------------------
+function loadFile(file) {
+  const fr = new FileReader();
+  fr.onload = () => { try { render(parseBin(fr.result), true); } catch (e) { alert(e.message); } };
+  fr.readAsArrayBuffer(file);
+}
+document.getElementById('file').addEventListener('change', e => e.target.files[0] && loadFile(e.target.files[0]));
+['colormode', 'f-cutscene', 'f-orphan'].forEach(id =>
+  document.getElementById(id).addEventListener('change', () => { if (lastData) render(lastData, false); }));
+const drop = document.getElementById('drop');
+window.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('show'); });
+window.addEventListener('dragleave', e => { if (e.clientX <= 0 || e.clientY <= 0) drop.classList.remove('show'); });
+window.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('show'); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+</script>
+</body>
+</html>

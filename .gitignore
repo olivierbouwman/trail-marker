@@ -10,3 +10,6 @@ TrailMarker.asi
 
 # Claude Code local config
 .claude/
+
+# macOS
+.DS_Store

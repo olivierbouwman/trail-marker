@@ -48,8 +48,8 @@ To stop logging, remove `TrailMarker.asi`. Story Mode only — ScriptHook does n
 
 ## Output format — `TrailMarker.bin`
 
-Little-endian. An 8-byte header, then fixed **18-byte records** — so tools can index by
-offset (`recordCount = (fileSize − 8) / 18`) with no parsing.
+Little-endian. An 8-byte header, then fixed **20-byte records** — so tools can index by
+offset (`recordCount = (fileSize − 8) / 20`) with no parsing.
 
 **Header**
 
@@ -57,7 +57,7 @@ offset (`recordCount = (fileSize − 8) / 18`) with no parsing.
 |---|---|---|
 | 0 | `char[4]` | magic `"R2GP"` |
 | 4 | `uint16` | version (`1`) |
-| 6 | `uint16` | record size (`18`) |
+| 6 | `uint16` | record size (`20`) |
 
 **Record**
 
@@ -72,6 +72,7 @@ offset (`recordCount = (fileSize − 8) / 18`) with no parsing.
 | 12 | `int8` | `honor` | −100…+100 (0 = neutral) |
 | 13 | `uint8` | `character` | 0 Arthur · 1 John · 2 other |
 | 14 | `uint32` | `cash` | whole dollars |
+| 18 | `uint16` | `bounty` | total bounty in dollars |
 
 **Flag bits:** `1` non-gameplay (cutscene) · `2` keepalive · `4` combat · `8` wanted ·
 `16` dead/dying · `32` segment_start (first point of a launch or savegame load) ·
@@ -88,9 +89,14 @@ offset (`recordCount = (fileSize − 8) / 18`) with no parsing.
   is the respawn that always follows a real death — a backward `ingame_time` jump + position
   teleport with **no** `segment_start`; the death spot is the last record before it.
 
-## Reading the data
+## Viewing & reading the data
 
-`read_trailmarker.py` is a dependency-free reference decoder:
+- **`viewer/`** — a static, no-server web viewer that draws your travels on the RDR2 map
+  (colored by transport / honor / money / bounty / combat, with death markers, hover
+  details, and filters). Open `viewer/index.html` and drag a `TrailMarker.bin` onto it.
+  See `viewer/README.md`.
+- **`read_trailmarker.py`** — a tiny dependency-free reference decoder for the binary format
+  (quick CLI inspection, and a worked example for anyone writing their own tool):
 
 ```sh
 python3 read_trailmarker.py TrailMarker.bin          # summary + first/last records
