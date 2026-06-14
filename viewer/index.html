@@ -44,13 +44,13 @@
       <option value="transport">Transport</option>
       <option value="honor">Honor</option>
       <option value="cash">Money</option>
-      <option value="bounty">Bounty</option>
       <option value="combat">Combat</option>
     </select>
   </div>
   <div style="margin-top:6px;">
     <label><input type="checkbox" id="f-cutscene"> hide cutscenes</label><br>
-    <label><input type="checkbox" id="f-orphan"> hide post-reload branches</label>
+    <label><input type="checkbox" id="f-orphan"> hide post-reload branches</label><br>
+    <label><input type="checkbox" id="f-teleport" checked> show fast-travel jumps</label>
   </div>
   <div id="stats"></div>
   <div id="legend"></div>
@@ -77,6 +77,7 @@ const T = {
   6: ['other',   '#e0863a'],
 };
 const F_SEGMENT_START = 0x20, F_DEAD = 0x10;
+const TELEPORT_UNITS = 300; // jumps larger than this between points = fast-travel/teleport, not real travel
 const FLAG_NAMES = ['non-gameplay', 'keepalive', 'combat', 'wanted', 'dead', 'segment_start', 'orphaned'];
 const flagNames = f => FLAG_NAMES.filter((_, i) => f & (1 << i)).join(', ') || 'none';
 
@@ -104,11 +105,10 @@ function fmtTime(t) {
 
 // --- Coloring modes -----------------------------------------------------------
 function dataRanges(recs) {
-  const R = { hMin: 1e9, hMax: -1e9, cMin: 1e9, cMax: -1e9, bMin: 1e9, bMax: -1e9 };
+  const R = { hMin: 1e9, hMax: -1e9, cMin: 1e9, cMax: -1e9 };
   for (const r of recs) {
     R.hMin = Math.min(R.hMin, r.honor); R.hMax = Math.max(R.hMax, r.honor);
     R.cMin = Math.min(R.cMin, r.cash);  R.cMax = Math.max(R.cMax, r.cash);
-    R.bMin = Math.min(R.bMin, r.bounty); R.bMax = Math.max(R.bMax, r.bounty);
   }
   return R;
 }
@@ -118,7 +118,6 @@ function colorOf(r, mode, R) {
   switch (mode) {
     case 'honor':  return ramp(qnorm(r.honor, R.hMin, R.hMax), 0, 120);   // red (low) -> green (high)
     case 'cash':   return ramp(qnorm(r.cash, R.cMin, R.cMax), 210, 0);    // blue (low) -> red (high)
-    case 'bounty': return ramp(qnorm(r.bounty, R.bMin, R.bMax), 120, 0);  // green (low) -> red (high)
     case 'combat': return (r.flags & 0x04) ? '#ff3b3b' : '#5a6b3a';
     default:       return (T[r.transport] || ['', '#fff'])[1];            // transport
   }
@@ -131,7 +130,7 @@ function renderLegend(mode, seenT, R) {
     lg.innerHTML = `<span><i style="background:#ff3b3b"></i>in combat</span> <span><i style="background:#5a6b3a"></i>peaceful</span>`;
   else {
     const [lo, hi, h0, h1, label] = mode === 'honor' ? [R.hMin, R.hMax, 0, 120, 'honor']
-      : mode === 'cash' ? [R.cMin, R.cMax, 210, 0, 'cash $'] : [R.bMin, R.bMax, 120, 0, 'bounty $'];
+      : [R.cMin, R.cMax, 210, 0, 'cash $'];
     const grad = `linear-gradient(to right, ${ramp(0, h0, h1)}, ${ramp(.5, h0, h1)}, ${ramp(1, h0, h1)})`;
     lg.innerHTML = `${label}: ${lo} <span style="display:inline-block;width:90px;height:11px;border-radius:2px;vertical-align:middle;background:${grad}"></span> ${hi}`;
   }
@@ -162,7 +161,7 @@ function parseBin(buf) {
       x: dv.getInt16(off + 4, true) / 2, y: dv.getInt16(off + 6, true) / 2, z: dv.getInt16(off + 8, true) / 2,
       transport: dv.getUint8(off + 10), flags: dv.getUint8(off + 11),
       honor: dv.getInt8(off + 12), character: dv.getUint8(off + 13),
-      cash: dv.getUint32(off + 14, true), bounty: recordSize >= 20 ? dv.getUint16(off + 18, true) : 0,
+      cash: dv.getUint32(off + 14, true),
     });
   }
   return { version, recordSize, recs };
@@ -192,27 +191,32 @@ function render(data, doFit) {
   const mode = document.getElementById('colormode').value;
   const R = dataRanges(recs);
   const exCut = document.getElementById('f-cutscene').checked;
+  const showJumps = document.getElementById('f-teleport').checked;
   const orph = document.getElementById('f-orphan').checked ? computeOrphans(recs) : null;
 
-  const lines = [], deaths = [];
+  const lines = [], deaths = [], teleports = [];
   hoverPts = [];
-  let run = [], runC = null, prevLL = null, kept = 0;
+  let run = [], runC = null, prevLL = null, pgx = null, pgy = null, kept = 0;
   const flush = () => { if (run.length > 1) lines.push(L.polyline(run, { color: runC, weight: 2.4, opacity: .92 })); };
   const seenT = new Set();
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
-    if ((exCut && (r.flags & 0x01)) || (orph && orph[i])) { flush(); run = []; runC = null; prevLL = null; continue; }
+    if ((exCut && (r.flags & 0x01)) || (orph && orph[i])) { flush(); run = []; runC = null; prevLL = null; pgx = null; continue; }
     const ll = gameToLatLng(r.x, r.y);
     const col = colorOf(r, mode, R);
-    if (r.flags & F_SEGMENT_START) { flush(); run = [ll]; runC = col; }     // new session: don't connect
-    else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; } // color change: connect
+    const teleport = prevLL && pgx !== null && Math.hypot(r.x - pgx, r.y - pgy) > TELEPORT_UNITS;
+    if ((r.flags & F_SEGMENT_START) || teleport) {                         // session boundary OR fast-travel jump
+      flush();
+      if (teleport && showJumps) teleports.push(L.polyline([prevLL, ll], { color: '#9a9a9a', weight: 1, opacity: .5, dashArray: '4 7' }));
+      run = [ll]; runC = col;
+    } else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; } // color change: connect
     else run.push(ll);
     if (r.flags & F_DEAD) deaths.push(L.circleMarker(ll, { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85 }).bindTooltip('💀 died here'));
     hoverPts.push({ lat: ll[0], lng: ll[1], r });
-    prevLL = ll; seenT.add(r.transport); kept++;
+    prevLL = ll; pgx = r.x; pgy = r.y; seenT.add(r.transport); kept++;
   }
   flush();
-  pathLayer = L.layerGroup([...lines, ...deaths]).addTo(map);
+  pathLayer = L.layerGroup([...teleports, ...lines, ...deaths]).addTo(map);
 
   if (doFit && hoverPts.length) map.fitBounds(L.latLngBounds(hoverPts.map(p => [p.lat, p.lng])), { padding: [40, 40], maxZoom: 6 });
 
@@ -251,7 +255,7 @@ function showHover() {
   const r = best.r;
   hoverBox.innerHTML =
     `<b>${fmtTime(r.t)}</b><br>` +
-    `${(T[r.transport] || ['?'])[0]} · honor ${r.honor} · $${r.cash} · bounty $${r.bounty}<br>` +
+    `${(T[r.transport] || ['?'])[0]} · honor ${r.honor} · $${r.cash}<br>` +
     `${CHARS[r.character] || 'char?'} · game (${r.x.toFixed(0)}, ${r.y.toFixed(0)})<br>` +
     `flags: ${flagNames(r.flags)}`;
   hoverBox.style.display = 'block';
@@ -266,7 +270,7 @@ function loadFile(file) {
   fr.readAsArrayBuffer(file);
 }
 document.getElementById('file').addEventListener('change', e => e.target.files[0] && loadFile(e.target.files[0]));
-['colormode', 'f-cutscene', 'f-orphan'].forEach(id =>
+['colormode', 'f-cutscene', 'f-orphan', 'f-teleport'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => { if (lastData) render(lastData, false); }));
 const drop = document.getElementById('drop');
 window.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('show'); });

@@ -45,7 +45,6 @@ static const U64 H_GET_VEHICLE_PED_IS_IN    = 0x9A9112A0FE9A4713ULL;
 static const U64 H_IS_GAMEPLAY_CAM_RENDER   = 0x8660EA714834E412ULL;
 static const U64 H_IS_PED_IN_COMBAT         = 0x4859F1FC66A6278EULL;
 static const U64 H_GET_PLAYER_WANTED_LEVEL  = 0xABC532F9098BFD9DULL;
-static const U64 H_GET_BOUNTY               = 0x54310AAB97B92816ULL;
 static const U64 H_IS_PLAYER_DEAD           = 0x2E9C3FCB6798F397ULL;
 static const U64 H_IS_PED_DEAD_OR_DYING     = 0x3317DEDB88C95038ULL;
 static const U64 H_IS_ENTITY_DEAD           = 0x7D5B1F88E7504BBAULL;
@@ -81,7 +80,6 @@ static bool     IS_PLAYER_DEAD(int player)   { return nv1_bool(H_IS_PLAYER_DEAD,
 static bool     IS_GAMEPLAY_CAM_RENDERING()  { p_nativeInit(H_IS_GAMEPLAY_CAM_RENDER); return ((*p_nativeCall()) & 0xFF) != 0; }
 static bool     IS_PED_IN_COMBAT(int ped, int target) { p_nativeInit(H_IS_PED_IN_COMBAT); p_nativePush64((U64)ped); p_nativePush64((U64)target); return ((*p_nativeCall()) & 0xFF) != 0; }
 static int      GET_PLAYER_WANTED_LEVEL(int player) { p_nativeInit(H_GET_PLAYER_WANTED_LEVEL); p_nativePush64((U64)player); return (int)(*p_nativeCall()); }
-static int      GET_BOUNTY(int player) { p_nativeInit(H_GET_BOUNTY); p_nativePush64((U64)player); return (int)(*p_nativeCall()); }
 static int      MONEY_GET_CASH_BALANCE()     { return nv0_int(H_MONEY_GET_CASH_BALANCE); }
 static unsigned GET_ENTITY_MODEL(int e)      { p_nativeInit(H_GET_ENTITY_MODEL); p_nativePush64((U64)e); return (unsigned)(*p_nativeCall()); }
 static int      GET_VEHICLE_PED_IS_IN(int p) { p_nativeInit(H_GET_VEHICLE_PED_IS_IN); p_nativePush64((U64)p); p_nativePush64(0); return (int)(*p_nativeCall()); }
@@ -163,11 +161,10 @@ struct Record {
     int8_t   honor;      // -100..+100 (0 = neutral)
     uint8_t  character;  // 0 Arthur, 1 John, 2 other
     uint32_t cash;       // whole dollars
-    uint16_t bounty;     // total bounty in dollars (0..65535)
 };
 #pragma pack(pop)
 static_assert(sizeof(Header) == 8, "header must be 8 bytes");
-static_assert(sizeof(Record) == 20, "record must be 20 bytes");
+static_assert(sizeof(Record) == 18, "record must be 18 bytes");
 
 // flags bits
 enum {
@@ -322,8 +319,6 @@ static void ScriptMain() {
         r.honor     = (int8_t)honor;
         r.character = (uint8_t)classifyCharacter(GET_ENTITY_MODEL(ped));
         r.cash      = (uint32_t)(MONEY_GET_CASH_BALANCE() / 100); // cents -> dollars
-        int bty = GET_BOUNTY(player);
-        r.bounty    = (uint16_t)(bty < 0 ? 0 : (bty > 65535 ? 65535 : bty));
         fwrite(&r, sizeof r, 1, g_out);
 
         haveLast = true; lastX = c.x; lastY = c.y; lastZ = c.z;

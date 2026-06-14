@@ -5,7 +5,7 @@ Usage:
     python3 read_trailmarker.py TrailMarker.bin            # summary + first/last rows
     python3 read_trailmarker.py TrailMarker.bin --all      # dump every record as CSV
 
-The file is little-endian, with an 8-byte header followed by fixed 20-byte records:
+The file is little-endian, with an 8-byte header followed by fixed 18-byte records:
 
     Header : char[4] magic "R2GP" | uint16 version | uint16 recordSize
     Record : uint32 ingame_time   (seconds since in-game 1800-01-01)
@@ -16,12 +16,11 @@ The file is little-endian, with an 8-byte header followed by fixed 20-byte recor
              int8   honor          -100..+100 (0 neutral)
              uint8  character      0 Arthur, 1 John, 2 other
              uint32 cash           whole dollars
-             uint16 bounty         total bounty in dollars
 """
 import struct, sys
 
 HEADER = struct.Struct("<4sHH")     # 8 bytes
-RECORD = struct.Struct("<IhhhBBbBIH")  # 20 bytes
+RECORD = struct.Struct("<IhhhBBbBI")  # 18 bytes
 TRANSPORT = {0: "foot", 1: "horse", 2: "boat", 3: "train", 4: "balloon", 5: "swim", 6: "other"}
 FLAGS = ["nongameplay", "keepalive", "combat", "wanted", "dead", "segment_start", "orphaned"]
 
@@ -40,9 +39,9 @@ def records(path):
             buf = fh.read(RECORD.size)
             if len(buf) < RECORD.size:
                 break  # ignore a torn trailing record
-            t, x, y, z, transport, flags, honor, character, cash, bounty = RECORD.unpack(buf)
+            t, x, y, z, transport, flags, honor, character, cash = RECORD.unpack(buf)
             yield dict(t=t, x=x / 2, y=y / 2, z=z / 2, transport=transport,
-                       flags=flags, honor=honor, character=character, cash=cash, bounty=bounty)
+                       flags=flags, honor=honor, character=character, cash=cash)
 
 
 def main():
@@ -56,11 +55,11 @@ def main():
     rows = list(it)
     print(f"# {path}: format v{version}, {len(rows)} records")
     if dump_all:
-        print("ingame_time,x,y,z,transport,flags,honor,character,cash,bounty")
+        print("ingame_time,x,y,z,transport,flags,honor,character,cash")
         for r in rows:
             print(f"{r['t']},{r['x']:.1f},{r['y']:.1f},{r['z']:.1f},"
                   f"{TRANSPORT.get(r['transport'], r['transport'])},{flag_names(r['flags'])},"
-                  f"{r['honor']},{r['character']},{r['cash']},{r['bounty']}")
+                  f"{r['honor']},{r['character']},{r['cash']}")
         return
     if not rows:
         return

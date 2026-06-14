@@ -16,6 +16,8 @@ logs spanning thousands of hours (~65 MB for 1000 h, worst case).
   "keepalive" point while stationary, so travel is densely captured and idle time stays tiny.
 - **Transport mode** per point: foot, horse, boat, train, balloon, swimming, or other vehicle.
 - **Context flags**: cutscene/non-gameplay, in combat, wanted, dead, keepalive, session-start.
+  (The `wanted` flag captures active law pursuit; a dollar bounty figure was dropped — the
+  game exposes no clean way to read your total across regions. See the format notes.)
 - **Honor** (−100…+100), **character** (Arthur / John / other), and **cash** (whole dollars).
 - **Save-aware**: session boundaries are marked so a viewer can separate playthrough branches
   (e.g. after loading an earlier save) and reconstruct death locations.
@@ -48,8 +50,8 @@ To stop logging, remove `TrailMarker.asi`. Story Mode only — ScriptHook does n
 
 ## Output format — `TrailMarker.bin`
 
-Little-endian. An 8-byte header, then fixed **20-byte records** — so tools can index by
-offset (`recordCount = (fileSize − 8) / 20`) with no parsing.
+Little-endian. An 8-byte header, then fixed **18-byte records** — so tools can index by
+offset (`recordCount = (fileSize − 8) / 18`) with no parsing.
 
 **Header**
 
@@ -57,7 +59,7 @@ offset (`recordCount = (fileSize − 8) / 20`) with no parsing.
 |---|---|---|
 | 0 | `char[4]` | magic `"R2GP"` |
 | 4 | `uint16` | version (`1`) |
-| 6 | `uint16` | record size (`20`) |
+| 6 | `uint16` | record size (`18`) |
 
 **Record**
 
@@ -72,7 +74,6 @@ offset (`recordCount = (fileSize − 8) / 20`) with no parsing.
 | 12 | `int8` | `honor` | −100…+100 (0 = neutral) |
 | 13 | `uint8` | `character` | 0 Arthur · 1 John · 2 other |
 | 14 | `uint32` | `cash` | whole dollars |
-| 18 | `uint16` | `bounty` | total bounty in dollars |
 
 **Flag bits:** `1` non-gameplay (cutscene) · `2` keepalive · `4` combat · `8` wanted ·
 `16` dead/dying · `32` segment_start (first point of a launch or savegame load) ·
@@ -92,7 +93,7 @@ offset (`recordCount = (fileSize − 8) / 20`) with no parsing.
 ## Viewing & reading the data
 
 - **`viewer/`** — a static, no-server web viewer that draws your travels on the RDR2 map
-  (colored by transport / honor / money / bounty / combat, with death markers, hover
+  (colored by transport / honor / money / combat, with death markers, hover
   details, and filters). Open `viewer/index.html` and drag a `TrailMarker.bin` onto it.
   See `viewer/README.md`.
 - **`read_trailmarker.py`** — a tiny dependency-free reference decoder for the binary format
