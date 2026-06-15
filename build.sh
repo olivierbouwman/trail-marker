@@ -21,8 +21,7 @@ echo "Built $OUT ($(wc -c < "$OUT") bytes)"
 
 if [[ -d "$GAME" ]]; then
     cp "$OUT" "$GAME/$OUT"
-    [[ -f "$GAME/TrailMarker.ini" ]] || cp TrailMarker.ini "$GAME/TrailMarker.ini"
     echo "Deployed -> $GAME/$OUT"
 else
-    echo "GAME folder not found; skipped deploy. Copy $OUT + TrailMarker.ini into your RDR2 folder."
+    echo "GAME folder not found; skipped deploy. Copy $OUT into your RDR2 folder."
 fi

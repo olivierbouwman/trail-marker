@@ -21,8 +21,8 @@ logs spanning thousands of hours (~65 MB for 1000 h, worst case).
 - **Honor** (−100…+100), **character** (Arthur / John / other), and **cash** (whole dollars).
 - **Save-aware**: session boundaries are marked so a viewer can separate playthrough branches
   (e.g. after loading an earlier save) and reconstruct death locations.
-- **Compact & robust**: fixed-size little-endian records, append-only, periodic flush; a crash
-  costs at most one record. Negligible performance impact.
+- **Compact & robust**: fixed-size little-endian records, append-only, flushed after every
+  record; a crash costs at most the record in flight. Negligible performance impact.
 
 ## Requirements
 
@@ -32,21 +32,15 @@ logs spanning thousands of hours (~65 MB for 1000 h, worst case).
 ## Install
 
 1. Install ScriptHookRDR2 V2 (its loader, e.g. `dinput8.dll`, and `ScriptHookRDR2.dll`).
-2. Copy **`TrailMarker.asi`** and **`TrailMarker.ini`** into your RDR2 folder (the one with
-   `RDR2.exe`), alongside ScriptHook.
+2. Copy **`TrailMarker.asi`** into your RDR2 folder (the one with `RDR2.exe`), alongside
+   ScriptHook.
 3. Launch the game and play. The log is written to **`TrailMarker.bin`** in the same folder.
 
 To stop logging, remove `TrailMarker.asi`. Story Mode only — ScriptHook does not run in RDR Online.
 
-## Configuration — `TrailMarker.ini`
-
-| Key | Default | Meaning |
-|---|---|---|
-| `sampleIntervalMs` | `1000` | how often to check position (real time, framerate-independent) |
-| `movementThreshold` | `3.0` | world units of movement that trigger a recorded point |
-| `keepaliveSeconds` | `45` | record at least this often while stationary (flagged) |
-| `flushSeconds` | `30` | how often buffered records are flushed to disk |
-| `outputPath` | *(next to the .asi)* | override the output file location |
+There's nothing to configure — sensible defaults are baked in (position checked ~once a second,
+a point recorded after ~3 world units of movement, plus a keepalive point at least every 45 s
+while stationary). To put the log somewhere else, make a file link to `TrailMarker.bin`.
 
 ## Output format — `TrailMarker.bin`
 

@@ -184,42 +184,12 @@ static int16_t coord16(float v) {
     return (int16_t)s;
 }
 
-// ---- Configuration (TrailMarker.ini next to the .asi) ----
-struct Config {
-    int   sampleIntervalMs  = 1000; // how often to check position
-    float movementThreshold = 3.0f; // world units of movement that trigger a recorded point
-    int   keepaliveSeconds  = 45;   // record at least this often while stationary
-    int   flushSeconds      = 30;   // flush buffered records to disk this often
-    char  outputPath[MAX_PATH] = {0}; // empty => TrailMarker.bin next to the .asi
-} g_cfg;
-
-static void trim(char *s) {
-    char *p = s; while (*p == ' ' || *p == '\t') p++;
-    if (p != s) memmove(s, p, strlen(p) + 1);
-    size_t n = strlen(s);
-    while (n && (s[n-1]=='\r'||s[n-1]=='\n'||s[n-1]==' '||s[n-1]=='\t')) s[--n] = 0;
-}
-static void loadConfig(const char *iniPath) {
-    FILE *f = fopen(iniPath, "r");
-    if (!f) return;
-    char line[512];
-    while (fgets(line, sizeof line, f)) {
-        if (line[0] == '#' || line[0] == ';') continue;
-        char *eq = strchr(line, '='); if (!eq) continue;
-        *eq = 0;
-        char key[128], val[384];
-        strncpy(key, line, sizeof key - 1); key[sizeof key - 1] = 0;
-        strncpy(val, eq + 1, sizeof val - 1); val[sizeof val - 1] = 0;
-        trim(key); trim(val);
-        if      (!strcmp(key, "sampleIntervalMs"))  g_cfg.sampleIntervalMs = atoi(val);
-        else if (!strcmp(key, "movementThreshold")) g_cfg.movementThreshold = (float)atof(val);
-        else if (!strcmp(key, "keepaliveSeconds"))  g_cfg.keepaliveSeconds = atoi(val);
-        else if (!strcmp(key, "flushSeconds"))      g_cfg.flushSeconds = atoi(val);
-        else if (!strcmp(key, "outputPath"))        strncpy(g_cfg.outputPath, val, MAX_PATH - 1);
-    }
-    fclose(f);
-    if (g_cfg.sampleIntervalMs < 50) g_cfg.sampleIntervalMs = 50;
-}
+// ---- Tuning (compile-time constants; no config file) ----
+// These defaults suit every playthrough; there's nothing to misconfigure. To relocate the
+// output, make a file link to TrailMarker.bin.
+static const int   SAMPLE_INTERVAL_MS = 1000; // how often to check position (real time, fps-independent)
+static const float MOVEMENT_THRESHOLD = 3.0f; // world units of movement that records a point
+static const int   KEEPALIVE_SECONDS  = 45;   // record at least this often while stationary
 
 // ---- Paths & output ----
 static char  g_dir[MAX_PATH] = {0}; // directory of this .asi (trailing backslash)
@@ -233,14 +203,9 @@ static void resolveDir(HMODULE hModule) {
     if (slash) slash[1] = 0; else g_dir[0] = 0;
 }
 
-// Called from the script thread (not DllMain): reads config, opens the output file.
+// Called from the script thread (not DllMain): opens the output file next to the .asi.
 static void initOutput() {
-    char ini[MAX_PATH];
-    snprintf(ini, sizeof ini, "%sTrailMarker.ini", g_dir);
-    loadConfig(ini);
-    if (g_cfg.outputPath[0]) strncpy(g_outPath, g_cfg.outputPath, MAX_PATH - 1);
-    else snprintf(g_outPath, sizeof g_outPath, "%sTrailMarker.bin", g_dir);
-
+    snprintf(g_outPath, sizeof g_outPath, "%sTrailMarker.bin", g_dir);
     g_out = fopen(g_outPath, "ab");
     if (!g_out) return;
     fseek(g_out, 0, SEEK_END);
@@ -259,18 +224,15 @@ static void ScriptMain() {
     bool   haveLast = false;
     float  lastX = 0, lastY = 0, lastZ = 0;
     int    msSinceRecord = 0;
-    int    msSinceFlush  = 0;
     // segment_start marks the first recorded point of this script session (a game launch,
     // or ScriptHook's script reload on a savegame load). The reader uses it together with
     // the recorded time to split sessions and identify abandoned (orphaned) branches.
     bool   firstRecord = true;
-    const int keepaliveMs = g_cfg.keepaliveSeconds * 1000;
-    const int flushMs     = g_cfg.flushSeconds * 1000;
+    const int keepaliveMs = KEEPALIVE_SECONDS * 1000;
 
     for (;;) {
-        p_scriptWait((DWORD)g_cfg.sampleIntervalMs);
-        msSinceRecord += g_cfg.sampleIntervalMs;
-        msSinceFlush  += g_cfg.sampleIntervalMs;
+        p_scriptWait((DWORD)SAMPLE_INTERVAL_MS);
+        msSinceRecord += SAMPLE_INTERVAL_MS;
 
         int ped = PLAYER_PED_ID();
         if (ped == 0) continue;
@@ -282,7 +244,7 @@ static void ScriptMain() {
         bool keepalive = false;
         if (haveLast) {
             float dx = c.x - lastX, dy = c.y - lastY, dz = c.z - lastZ;
-            bool moved = dx*dx + dy*dy + dz*dz > g_cfg.movementThreshold * g_cfg.movementThreshold;
+            bool moved = dx*dx + dy*dy + dz*dz > MOVEMENT_THRESHOLD * MOVEMENT_THRESHOLD;
             if (!moved) {
                 if (msSinceRecord >= keepaliveMs) keepalive = true;
                 else continue;
@@ -320,12 +282,13 @@ static void ScriptMain() {
         r.character = (uint8_t)classifyCharacter(GET_ENTITY_MODEL(ped));
         r.cash      = (uint32_t)(MONEY_GET_CASH_BALANCE() / 100); // cents -> dollars
         fwrite(&r, sizeof r, 1, g_out);
+        fflush(g_out); // hand each record straight to the OS: a crash loses at most the record
+                       // in flight, an 18-byte write/sec is free, and no close-on-detach is
+                       // needed (fflush != fsync, so this never forces a disk seek).
 
         haveLast = true; lastX = c.x; lastY = c.y; lastZ = c.z;
         msSinceRecord = 0;
         firstRecord = false;
-
-        if (msSinceFlush >= flushMs) { fflush(g_out); msSinceFlush = 0; }
     }
 }
 
@@ -345,8 +308,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
         p_getGlobalPtr   = (U64 *(*)(int))               GetProcAddress(sh, "?getGlobalPtr@@YAPEA_KH@Z");
         if (p_nativeInit && p_nativePush64 && p_nativeCall && p_scriptRegister && p_scriptWait)
             p_scriptRegister(hModule, ScriptMain);
-    } else if (reason == DLL_PROCESS_DETACH) {
-        if (g_out) { fflush(g_out); fclose(g_out); g_out = nullptr; }
     }
+    // No DLL_PROCESS_DETACH handling on purpose: every record is flushed as it's written, so
+    // nothing is buffered to lose, and the OS closes the file handle on process exit. Closing
+    // it here would only risk racing the still-running script thread.
     return TRUE;
 }
