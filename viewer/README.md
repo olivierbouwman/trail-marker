@@ -13,8 +13,9 @@ draw across the map) and fits the view to your travels.
 ## Status
 
 Working: the **track line** (split per session), **switchable coloring** (transport / honor /
-money / combat) with an adaptive legend, **death markers**, **hover details** (time,
-transport, honor, cash, flags), and a click-to-read calibration helper.
+money / combat) with an adaptive legend, **death markers** (exact where the game flagged a
+death, plus ones inferred from respawns), and **hover details** (time, transport, honor, cash,
+flags).
 
 Filters: **hide cutscenes** (non-gameplay points), **hide post-reload branches** (records
 abandoned by a later savegame load), and **show fast-travel jumps** (large teleports — fast
@@ -60,11 +61,3 @@ These all work on the **existing** log — no new data needs to be captured:
 - **Honor & cash over time** — small sparkline charts: your moral arc and your wallet across
   the playthrough.
 - **Speed coloring** — a colour mode derived from position/time deltas (skipping teleports).
-- **Day/night & date filters** — the in-game clock is logged, so "night travel only" or a
-  date-range slider (which roughly tracks story chapters) are essentially free.
-
-## Calibration
-
-The game→map transform (`CAL` at the top of `index.html`) is a best estimate. If the
-track doesn't line up with map features, that's the knob to tune — three numbers
-(`scale`, `offX`, `offY`).

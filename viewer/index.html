@@ -16,7 +16,6 @@
   #panel h1 { font-size: 15px; margin: 0 0 6px; letter-spacing: .04em; }
   #panel .hint { color: #b3a982; }
   #stats { margin-top: 8px; line-height: 1.5; }
-  #click { margin-top: 8px; padding-top: 8px; border-top: 1px solid #4a4128; color: #d8e0b0; font-family: ui-monospace, monospace; font-size: 12px; }
   #legend { margin-top: 8px; padding-top: 8px; border-top: 1px solid #4a4128; display: none; }
   #legend span { display: inline-block; margin: 2px 6px 2px 0; }
   #legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: middle; margin-right: 3px; }
@@ -54,7 +53,6 @@
   </div>
   <div id="stats"></div>
   <div id="legend"></div>
-  <div id="click">Click the map to read a position →</div>
 </div>
 <div id="drop">Drop TrailMarker.bin to load</div>
 <div id="hover"></div>
@@ -62,13 +60,11 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 // --- Game-world -> map (Leaflet CRS.Simple) transform -------------------------
-// Best-estimate, isotropic linear map. Tune from a known click (see #click readout).
-// Affine game->map fit (least-squares over 4 ground-truth points spanning the map:
-// Annesburg lighthouse+dock, Emerald Station, Saint Denis). Isotropic to within 0.9%,
-// max residual ~0.26 map-units. lat from game Y (north), lng from game X (east).
-const CAL = { ay: 0.01539, by: -63.684, cx: 0.01554, dx: 111.355 };
-const gameToLatLng = (x, y) => [ CAL.ay * y + CAL.by, CAL.cx * x + CAL.dx ];
-const latLngToGame = (lat, lng) => [ (lng - CAL.dx) / CAL.cx, (lat - CAL.by) / CAL.ay ];
+// Canonical Jean Ropke transform for the s.rsg.sc RDR2 tiles (the same CRS/bounds/zoom this
+// map uses): a single isotropic scale + offset. lat from game Y (north), lng from game X
+// (east). This matches the reference collectors map, so it needs no hand-calibration.
+const CAL = { s: 0.01552, offLat: -63.6, offLng: 111.29 };
+const gameToLatLng = (x, y) => [ CAL.s * y + CAL.offLat, CAL.s * x + CAL.offLng ];
 
 // --- Transport palette --------------------------------------------------------
 const T = {
@@ -184,6 +180,38 @@ function computeOrphans(recs) {
   return orph;
 }
 
+// Death locations, unified into one marker per death from two signals:
+//  - F_DEAD: the exact spot the game reported dead/dying — best-effort, catches ~half of
+//    deaths (the window is brief).
+//  - respawn-rewind: in-game time jumps backward with NO segment_start. A reload also rewinds
+//    time but carries a segment_start, so this reliably flags a death event; the spot is the
+//    last record before the rewind.
+// Most deaths respawn, so rewinds are the main list: we mark a nearby F_DEAD spot (exact) or
+// fall back to the pre-rewind record (approximate). But a death with NO following respawn —
+// you died then quit, or loaded an earlier save (masked as a reload) — leaves only its F_DEAD
+// flag, so we also emit any dead flag the rewind pass didn't already claim. De-duped so a
+// normal death isn't marked twice.
+function computeDeaths(recs) {
+  const out = [], claimed = new Set();
+  for (let i = 1; i < recs.length; i++) {
+    if (recs[i].flags & F_SEGMENT_START) continue;             // reload, not a death
+    if (!(recs[i].t > 0) || recs[i].t >= recs[i - 1].t) continue; // need a backward time jump
+    if (recs[i - 1].t - recs[i].t < 5) continue;              // ignore sub-sample jitter
+    let k = -1;                                                // nearest F_DEAD before the rewind
+    for (let j = i - 1; j >= 0 && j >= i - 6; j--)             // claim the whole dying-run in the window
+      if (recs[j].flags & F_DEAD) { if (k < 0) k = j; claimed.add(j); }
+    out.push({ idx: k >= 0 ? k : i - 1, exact: k >= 0 });
+  }
+  // Unclaimed dead flags = deaths with no respawn after them. One marker per dying-run.
+  for (let i = 0; i < recs.length; i++) {
+    if (!(recs[i].flags & F_DEAD) || (i > 0 && (recs[i - 1].flags & F_DEAD))) continue; // run start only
+    let claimedRun = false;
+    for (let j = i; j < recs.length && (recs[j].flags & F_DEAD); j++) if (claimed.has(j)) { claimedRun = true; break; }
+    if (!claimedRun) out.push({ idx: i, exact: true });
+  }
+  return out;
+}
+
 function render(data, doFit) {
   lastData = data;
   if (pathLayer) { map.removeLayer(pathLayer); pathLayer = null; }
@@ -211,31 +239,33 @@ function render(data, doFit) {
       run = [ll]; runC = col;
     } else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; } // color change: connect
     else run.push(ll);
-    if (r.flags & F_DEAD) deaths.push(L.circleMarker(ll, { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85 }).bindTooltip('💀 died here'));
     hoverPts.push({ lat: ll[0], lng: ll[1], r });
     prevLL = ll; pgx = r.x; pgy = r.y; seenT.add(r.transport); kept++;
   }
   flush();
-  pathLayer = L.layerGroup([...teleports, ...lines, ...deaths]).addTo(map);
+
+  // Death markers: exact (F_DEAD) drawn solid, inferred (respawn-rewind) hollow/dashed.
+  for (const d of computeDeaths(recs)) {
+    if ((exCut && (recs[d.idx].flags & 0x01)) || (orph && orph[d.idx])) continue; // hidden by a filter
+    const ll = gameToLatLng(recs[d.idx].x, recs[d.idx].y);
+    // Inferred spots (respawn-rewind, no dead flag) are normally within a sample of the real
+    // death spot, so they share the exact marker's look; the tooltip keeps the distinction.
+    deaths.push(L.circleMarker(ll, { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85 })
+      .bindTooltip(d.exact ? '💀 died here' : '💀 died here (approx)'));
+  }
+  // Marker at the most recent point — where you left off.
+  const last = recs[recs.length - 1];
+  const lastMarker = last ? L.circleMarker(gameToLatLng(last.x, last.y),
+    { radius: 6, color: '#e8c25a', weight: 2, fillColor: '#caa233', fillOpacity: .9 }).bindTooltip('📍 last position') : null;
+  pathLayer = L.layerGroup([...teleports, ...lines, ...deaths, ...(lastMarker ? [lastMarker] : [])]).addTo(map);
 
   if (doFit && hoverPts.length) map.fitBounds(L.latLngBounds(hoverPts.map(p => [p.lat, p.lng])), { padding: [40, 40], maxZoom: 6 });
 
   const sessions = recs.filter(r => r.flags & F_SEGMENT_START).length || (recs.length ? 1 : 0);
-  const last = recs[recs.length - 1];
   document.getElementById('stats').innerHTML =
-    `<b>${kept.toLocaleString()}</b>/${recs.length.toLocaleString()} pts · <b>${sessions}</b> session(s) · <b>${deaths.length}</b> 💀 · v${version}<br>` +
-    (last ? `last point: game (${last.x.toFixed(0)}, ${last.y.toFixed(0)})` : '');
+    `<b>${kept.toLocaleString()}</b>/${recs.length.toLocaleString()} pts · <b>${sessions}</b> session(s) · <b>${deaths.length}</b> 💀 · v${version}`;
   renderLegend(mode, seenT, R);
 }
-
-// --- Click readout (for calibration) ------------------------------------------
-map.on('click', e => {
-  const { lat, lng } = e.latlng;
-  const [gx, gy] = latLngToGame(lat, lng);
-  document.getElementById('click').innerHTML =
-    `clicked: latLng(${lat.toFixed(2)}, ${lng.toFixed(2)})<br>` +
-    `≈ game (${gx.toFixed(0)}, ${gy.toFixed(0)}) <span class="hint">(per current calibration)</span>`;
-});
 
 // --- Hover: show the nearest recorded point's details -------------------------
 const CHARS = ['Arthur', 'John', 'other'];
