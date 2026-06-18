@@ -293,21 +293,44 @@ static void ScriptMain() {
 }
 
 // ---- DLL entry ----
+static HMODULE g_self = nullptr;
+
+// Resolve ScriptHook's exported entry points (mangled names) from a loaded module.
+static bool bindScriptHook(HMODULE sh) {
+    p_nativeInit     = (void (*)(U64))                   GetProcAddress(sh, "?nativeInit@@YAX_K@Z");
+    p_nativePush64   = (void (*)(U64))                   GetProcAddress(sh, "?nativePush64@@YAX_K@Z");
+    p_nativeCall     = (U64 *(*)())                      GetProcAddress(sh, "?nativeCall@@YAPEA_KXZ");
+    p_scriptRegister = (void (*)(HMODULE, ScriptMainFn)) GetProcAddress(sh, "?scriptRegister@@YAXPEAUHINSTANCE__@@P6AXXZ@Z");
+    p_scriptWait     = (void (*)(DWORD))                 GetProcAddress(sh, "?scriptWait@@YAXK@Z");
+    p_getGlobalPtr   = (U64 *(*)(int))                   GetProcAddress(sh, "?getGlobalPtr@@YAPEA_KH@Z");
+    return p_nativeInit && p_nativePush64 && p_nativeCall && p_scriptRegister && p_scriptWait;
+}
+
+// Runs on a fresh thread (not under the loader lock): ensure ScriptHook is in the process, then
+// register our script. We LOAD ScriptHookRDR2.dll ourselves rather than only GetModuleHandle it,
+// so Trail Marker no longer depends on another .asi (e.g. a trainer) importing ScriptHook to pull
+// it in. Calling LoadLibrary here is safe; doing it from DllMain could deadlock the loader lock.
+static DWORD WINAPI initThread(LPVOID) {
+    HMODULE sh = GetModuleHandleA("ScriptHookRDR2.dll");
+    if (!sh) {
+        char path[MAX_PATH];
+        snprintf(path, sizeof path, "%sScriptHookRDR2.dll", g_dir); // next to this .asi
+        sh = LoadLibraryA(path);
+    }
+    if (sh && bindScriptHook(sh)) p_scriptRegister(g_self, ScriptMain);
+    return 0;
+}
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
-        resolveDir(hModule);
-
-        HMODULE sh = GetModuleHandleA("ScriptHookRDR2.dll");
-        if (!sh) return TRUE;
-        p_nativeInit     = (void (*)(U64))               GetProcAddress(sh, "?nativeInit@@YAX_K@Z");
-        p_nativePush64   = (void (*)(U64))               GetProcAddress(sh, "?nativePush64@@YAX_K@Z");
-        p_nativeCall     = (U64 *(*)())                  GetProcAddress(sh, "?nativeCall@@YAPEA_KXZ");
-        p_scriptRegister = (void (*)(HMODULE, ScriptMainFn)) GetProcAddress(sh, "?scriptRegister@@YAXPEAUHINSTANCE__@@P6AXXZ@Z");
-        p_scriptWait     = (void (*)(DWORD))             GetProcAddress(sh, "?scriptWait@@YAXK@Z");
-        p_getGlobalPtr   = (U64 *(*)(int))               GetProcAddress(sh, "?getGlobalPtr@@YAPEA_KH@Z");
-        if (p_nativeInit && p_nativePush64 && p_nativeCall && p_scriptRegister && p_scriptWait)
-            p_scriptRegister(hModule, ScriptMain);
+        g_self = hModule;
+        resolveDir(hModule); // sets g_dir, used to locate ScriptHook and (later) the output file
+        // Defer ScriptHook loading + registration to a worker thread — LoadLibrary from inside
+        // DllMain risks a loader-lock deadlock. CreateThread is safe here; the thread only starts
+        // once the loader lock is released after DllMain returns.
+        HANDLE t = CreateThread(nullptr, 0, initThread, nullptr, 0, nullptr);
+        if (t) CloseHandle(t);
     }
     // No DLL_PROCESS_DETACH handling on purpose: every record is flushed as it's written, so
     // nothing is buffered to lose, and the OS closes the file handle on process exit. Closing
