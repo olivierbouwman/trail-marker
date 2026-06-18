@@ -312,8 +312,8 @@ static bool bindScriptHook(HMODULE sh) {
 
 // Runs on a fresh thread (not under the loader lock): ensure ScriptHook is in the process, then
 // register our script. We LOAD ScriptHookRDR2.dll ourselves rather than only GetModuleHandle it,
-// so Trail Marker no longer depends on another .asi (e.g. a trainer) importing ScriptHook to pull
-// it in. Calling LoadLibrary here is safe; doing it from DllMain could deadlock the loader lock.
+// so Trail Marker loads on its own without needing another .asi (e.g. a trainer) to pull ScriptHook
+// in first. Calling LoadLibrary here is safe; doing it from DllMain could deadlock the loader lock.
 static DWORD WINAPI initThread(LPVOID) {
     HMODULE sh = GetModuleHandleA("ScriptHookRDR2.dll");
     if (!sh) {

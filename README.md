@@ -15,9 +15,8 @@ logs spanning thousands of hours (~65 MB for 1000 h, worst case).
 - **Smart sampling** — records a point when you've actually moved, plus a periodic
   "keepalive" point while stationary, so travel is densely captured and idle time stays tiny.
 - **Transport mode** per point: foot, horse, boat, train, balloon, swimming, or other vehicle.
-- **Context flags**: cutscene/non-gameplay, in combat, wanted, dead, keepalive, session-start.
-  (The `wanted` flag captures active law pursuit; a dollar bounty figure was dropped — the
-  game exposes no clean way to read your total across regions. See the format notes.)
+- **Context flags**: cutscene/non-gameplay, in combat, wanted (active law pursuit), dead,
+  keepalive, session-start.
 - **Honor** (−100…+100), **character** (Arthur / John / other), and **cash** (whole dollars).
 - **Save-aware**: session boundaries are marked so a viewer can separate playthrough branches
   (e.g. after loading an earlier save) and reconstruct death locations.
