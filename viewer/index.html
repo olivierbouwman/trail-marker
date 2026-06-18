@@ -23,6 +23,9 @@
     color: #ffe; align-items: center; justify-content: center; font-size: 22px; border: 3px dashed #c9b277; pointer-events: none; }
   #drop.show { display: flex; }
   .leaflet-container { background: #11140f; }
+  /* One GPU drop-shadow over the whole vector pane = a dark halo behind every track/marker so
+     colored lines stay legible on light terrain. No extra geometry, unlike a per-line casing. */
+  .leaflet-overlay-pane svg { filter: drop-shadow(0 0 1.5px rgba(0,0,0,.95)); }
   #hover {
     position: absolute; z-index: 1200; display: none; pointer-events: none;
     background: rgba(20,22,16,.94); color: #e8e2d0; border: 1px solid #6b5d3e;
@@ -224,23 +227,29 @@ function render(data, doFit) {
 
   const lines = [], deaths = [], teleports = [];
   hoverPts = [];
-  let run = [], runC = null, prevLL = null, pgx = null, pgy = null, kept = 0;
-  const flush = () => { if (run.length > 1) lines.push(L.polyline(run, { color: runC, weight: 2.4, opacity: .92 })); };
+  let run = [], runC = null, prevLL = null, pgx = null, pgy = null, pgt = null, kept = 0;
+  // Contrast against light terrain comes from a single drop-shadow on the whole vector pane
+  // (see CSS), so each run is just one polyline — no geometry doubling.
+  const flush = () => { if (run.length > 1) lines.push(L.polyline(run, { color: runC, weight: 2.4, opacity: .95 })); };
   const seenT = new Set();
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
-    if ((exCut && (r.flags & 0x01)) || (orph && orph[i])) { flush(); run = []; runC = null; prevLL = null; pgx = null; continue; }
+    if ((exCut && (r.flags & 0x01)) || (orph && orph[i])) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
     const ll = gameToLatLng(r.x, r.y);
     const col = colorOf(r, mode, R);
+    // A death respawn rewinds in-game time and warps you elsewhere — often a short hop the
+    // spatial threshold misses. It isn't travel, so break the track there too and draw no
+    // connector (the death marker already shows it), else we'd render a straight death->respawn line.
+    const respawn = prevLL && pgt !== null && r.t < pgt && !(r.flags & F_SEGMENT_START);
     const teleport = prevLL && pgx !== null && Math.hypot(r.x - pgx, r.y - pgy) > TELEPORT_UNITS;
-    if ((r.flags & F_SEGMENT_START) || teleport) {                         // session boundary OR fast-travel jump
+    if ((r.flags & F_SEGMENT_START) || teleport || respawn) {               // session boundary, fast-travel jump, or respawn
       flush();
-      if (teleport && showJumps) teleports.push(L.polyline([prevLL, ll], { color: '#9a9a9a', weight: 1, opacity: .5, dashArray: '4 7' }));
+      if (teleport && !respawn && showJumps) teleports.push(L.polyline([prevLL, ll], { color: '#9a9a9a', weight: 1, opacity: .5, dashArray: '4 7' }));
       run = [ll]; runC = col;
     } else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; } // color change: connect
     else run.push(ll);
     hoverPts.push({ lat: ll[0], lng: ll[1], r });
-    prevLL = ll; pgx = r.x; pgy = r.y; seenT.add(r.transport); kept++;
+    prevLL = ll; pgx = r.x; pgy = r.y; pgt = r.t; seenT.add(r.transport); kept++;
   }
   flush();
 
