@@ -41,6 +41,9 @@
   <h1>🤠 Trail Marker</h1>
   <div class="hint">Drag a <code>TrailMarker.bin</code> onto the page, or:</div>
   <input id="file" type="file" accept=".bin" />
+  <div id="sample-note" class="hint" style="display:none; margin-top:6px;">
+    Showing <strong>sample data</strong> — drop your own <code>TrailMarker.bin</code> to replace it.
+  </div>
   <div style="margin-top:8px;">Color by:
     <select id="colormode">
       <option value="transport">Transport</option>
@@ -305,7 +308,10 @@ function showHover() {
 // --- File loading -------------------------------------------------------------
 function loadFile(file) {
   const fr = new FileReader();
-  fr.onload = () => { try { render(parseBin(fr.result), true); } catch (e) { alert(e.message); } };
+  fr.onload = () => {
+    try { render(parseBin(fr.result), true); document.getElementById('sample-note').style.display = 'none'; }
+    catch (e) { alert(e.message); }
+  };
   fr.readAsArrayBuffer(file);
 }
 document.getElementById('file').addEventListener('change', e => e.target.files[0] && loadFile(e.target.files[0]));
@@ -315,6 +321,14 @@ const drop = document.getElementById('drop');
 window.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('show'); });
 window.addEventListener('dragleave', e => { if (e.clientX <= 0 || e.clientY <= 0) drop.classList.remove('show'); });
 window.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('show'); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+
+// Show the bundled sample on load so a first-time visitor sees a trail immediately.
+// Best-effort: fetch fails for file:// in most browsers, so we just leave the empty
+// map (and the drag-to-load prompt) in that case.
+fetch('TrailMarker.bin')
+  .then(r => { if (!r.ok) throw new Error('no sample'); return r.arrayBuffer(); })
+  .then(buf => { render(parseBin(buf), true); document.getElementById('sample-note').style.display = ''; })
+  .catch(() => {});
 </script>
 </body>
 </html>
