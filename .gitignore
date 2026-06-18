@@ -1,8 +1,5 @@
-# Build artifact (produced by build.sh)
-TrailMarker.asi
-
-# Runtime output
-*.bin
+# Runtime output (the live log lives in your RDR2 folder, not the repo).
+# Note: viewer/TrailMarker.bin is committed on purpose as sample data.
 *.log
 
 # IDE

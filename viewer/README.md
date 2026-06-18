@@ -10,6 +10,13 @@ Open `index.html` in a browser (double-click works — no server needed), then *
 session (it breaks the path at each game launch / savegame load so reload-teleports don't
 draw across the map) and fits the view to your travels.
 
+A small sample log, `TrailMarker.bin`, ships next to this README — drag it onto the viewer
+to see it work without playing first. The file is read entirely in your browser; nothing is
+uploaded anywhere.
+
+> Hosted copy: **https://olivierbouwman.github.io/trail-marker/** (served from this repo via
+> GitHub Pages — same single-file viewer, nothing to install).
+
 ## Status
 
 Working: the **track line** (split per session), **switchable coloring** (transport / honor /

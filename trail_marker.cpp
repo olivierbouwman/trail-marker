@@ -18,6 +18,10 @@
 #include <cstdlib>
 #include <cmath>
 
+// Mod version (distinct from the on-disk file-format version, which stays 1). `used` keeps it
+// past -O2/-s so it stays greppable: `strings TrailMarker.asi | grep -i trailmarker`.
+static const char TRAILMARKER_VERSION[] __attribute__((used)) = "TrailMarker 1.0.0";
+
 typedef uint64_t U64;
 typedef void (*ScriptMainFn)();
 
