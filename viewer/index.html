@@ -78,8 +78,9 @@ const T = {
   3: ['train',   '#c0c4cc'], 4: ['balloon', '#b06bd6'], 5: ['swim',    '#36cfd0'],
   6: ['other',   '#e0863a'],
 };
-const F_SEGMENT_START = 0x20, F_DEAD = 0x10;
+const F_SEGMENT_START = 0x20, F_DEAD = 0x10, F_COMBAT = 0x04;
 const TELEPORT_UNITS = 300; // jumps larger than this between points = fast-travel/teleport, not real travel
+const CLOCKSET_MAX_MOVE = 30; // a backward time jump with under this much movement = stayed in place (see computeDeaths)
 const FLAG_NAMES = ['non-gameplay', 'keepalive', 'combat', 'wanted', 'dead', 'segment_start', 'orphaned'];
 const flagNames = f => FLAG_NAMES.filter((_, i) => f & (1 << i)).join(', ') || 'none';
 
@@ -190,13 +191,26 @@ function computeOrphans(recs) {
 //  - F_DEAD: the exact spot the game reported dead/dying — best-effort, catches ~half of
 //    deaths (the window is brief).
 //  - respawn-rewind: in-game time jumps backward with NO segment_start. A reload also rewinds
-//    time but carries a segment_start, so this reliably flags a death event; the spot is the
-//    last record before the rewind.
+//    time but carries a segment_start, so this excludes reloads; the spot is the last record
+//    before the rewind.
 // Most deaths respawn, so rewinds are the main list: we mark a nearby F_DEAD spot (exact) or
 // fall back to the pre-rewind record (approximate). But a death with NO following respawn —
 // you died then quit, or loaded an earlier save (masked as a reload) — leaves only its F_DEAD
 // flag, so we also emit any dead flag the rewind pass didn't already claim. De-duped so a
 // normal death isn't marked twice.
+//
+// Caveat the rewind signal alone can't resolve: a story mission that needs a particular time of
+// day ALSO rewinds the clock backward (always to a round hour) with no segment_start — looks
+// exactly like a respawn by the time jump. The tell is movement: a death respawns you at a
+// doctor/camp/checkpoint (a real position warp), while a mission clock-set leaves you standing
+// where you are. So we suppress a rewind only when it has NO death evidence at all — no F_DEAD
+// in the dying-run window, no combat at the rewind, and you barely moved. Any warp keeps the
+// marker, so non-combat deaths (a fall, a train, drowning — all of which still respawn you
+// elsewhere) survive. We deliberately do NOT trust the cutscene flag here: it can't tell a
+// story cutscene from the death camera (both are "non-gameplay camera"), and it was inert across
+// a whole real death-containing session, whereas the position warp held up in every log.
+// Verified against real logs: clears RDR2's opening-chapter phantom deaths without dropping a
+// single F_DEAD- or warp-confirmed death.
 function computeDeaths(recs) {
   const out = [], claimed = new Set();
   for (let i = 1; i < recs.length; i++) {
@@ -206,6 +220,9 @@ function computeDeaths(recs) {
     let k = -1;                                                // nearest F_DEAD before the rewind
     for (let j = i - 1; j >= 0 && j >= i - 6; j--)             // claim the whole dying-run in the window
       if (recs[j].flags & F_DEAD) { if (k < 0) k = j; claimed.add(j); }
+    const combat = (recs[i - 1].flags & F_COMBAT) || (recs[i].flags & F_COMBAT);
+    const moved = Math.hypot(recs[i].x - recs[i - 1].x, recs[i].y - recs[i - 1].y);
+    if (k < 0 && !combat && moved <= CLOCKSET_MAX_MOVE) continue; // mission clock-set, not a death
     out.push({ idx: k >= 0 ? k : i - 1, exact: k >= 0 });
   }
   // Unclaimed dead flags = deaths with no respawn after them. One marker per dying-run.
