@@ -26,6 +26,10 @@
   /* One GPU drop-shadow over the whole vector pane = a dark halo behind every track/marker so
      colored lines stay legible on light terrain. No extra geometry, unlike a per-line casing. */
   .leaflet-overlay-pane svg { filter: drop-shadow(0 0 1.5px rgba(0,0,0,.95)); }
+  /* Replay draws in its own pane above the track; the same halo keeps it legible. While a replay
+     is in progress we fade the static track so the growing colored trail reads as "where I've been". */
+  .leaflet-replay-pane svg { filter: drop-shadow(0 0 1.5px rgba(0,0,0,.95)); }
+  .replaying .leaflet-overlay-pane { opacity: .3; transition: opacity .25s; }
   #hover {
     position: absolute; z-index: 1200; display: none; pointer-events: none;
     background: rgba(20,22,16,.94); color: #e8e2d0; border: 1px solid #6b5d3e;
@@ -33,6 +37,23 @@
     font-family: ui-monospace, monospace; max-width: 240px;
   }
   #hover b { color: #e8c25a; }
+  #replay {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 16px; z-index: 1100;
+    display: none; align-items: center; gap: 10px; width: min(620px, calc(100% - 32px));
+    background: rgba(20,22,16,.92); color: #e8e2d0; padding: 9px 13px;
+    border: 1px solid #6b5d3e; border-radius: 8px; font-size: 13px;
+  }
+  #replay.show { display: flex; }
+  #replay button {
+    flex: none; width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
+    border: 1px solid #6b5d3e; background: #2a2c20; color: #e8c25a; font-size: 15px; line-height: 1;
+  }
+  #replay button:hover { background: #353826; }
+  #rp-scrub { flex: 1 1 auto; min-width: 60px; accent-color: #caa233; cursor: pointer; }
+  #rp-speed { flex: none; background: #2a2c20; color: #e8e2d0; border: 1px solid #6b5d3e; border-radius: 4px; padding: 3px 4px; }
+  #rp-clock { flex: none; min-width: 196px; text-align: right; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.35; }
+  #rp-clock b { color: #e8c25a; }
+  #rp-clock .sub { color: #b3a982; }
 </style>
 </head>
 <body>
@@ -62,6 +83,17 @@
 </div>
 <div id="drop">Drop TrailMarker.bin to load</div>
 <div id="hover"></div>
+<div id="replay">
+  <button id="rp-play" title="Play / pause replay (space)">▶</button>
+  <input id="rp-scrub" type="range" min="0" max="0" value="0" step="1" />
+  <select id="rp-speed" title="Replay speed (points per second)">
+    <option value="20">1×</option>
+    <option value="40" selected>2×</option>
+    <option value="80">4×</option>
+    <option value="160">8×</option>
+  </select>
+  <div id="rp-clock"></div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -82,6 +114,7 @@ const F_SEGMENT_START = 0x20, F_DEAD = 0x10, F_COMBAT = 0x04, F_NONGAMEPLAY = 0x
 const TELEPORT_UNITS = 300; // jumps larger than this between points = fast-travel/teleport, not real travel
 const CLOCKSET_MAX_MOVE = 30; // a backward time jump with under this much movement = stayed in place (see computeDeaths)
 const CUTSCENE_RUN = 3; // consecutive non-gameplay records that mark a sustained cutscene, not a death's brief fade
+const TRIP_TIME_CAP = 1800; // replay trip clock: count gaps up to 30 game-min as "lived"; longer = a mission time-skip
 const FLAG_NAMES = ['non-gameplay', 'keepalive', 'combat', 'wanted', 'dead', 'segment_start', 'orphaned'];
 const flagNames = f => FLAG_NAMES.filter((_, i) => f & (1 << i)).join(', ') || 'none';
 
@@ -150,7 +183,7 @@ L.tileLayer('https://s.rsg.sc/sc/images/games/RDR2/map/game/{z}/{x}/{y}.jpg', {
 }).addTo(map);
 map.setView([-72, 88], 3);
 
-let lastData = null, pathLayer = null, hoverPts = [];
+let lastData = null, pathLayer = null, markerLayer = null, hoverPts = [];
 
 // --- Binary parsing -----------------------------------------------------------
 function parseBin(buf) {
@@ -249,6 +282,7 @@ function computeDeaths(recs) {
 function render(data, doFit) {
   lastData = data;
   if (pathLayer) { map.removeLayer(pathLayer); pathLayer = null; }
+  if (markerLayer) { map.removeLayer(markerLayer); markerLayer = null; }
   const { recs, version } = data;
   const mode = document.getElementById('colormode').value;
   const R = dataRanges(recs);
@@ -279,10 +313,14 @@ function render(data, doFit) {
       run = [ll]; runC = col;
     } else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; } // color change: connect
     else run.push(ll);
-    hoverPts.push({ lat: ll[0], lng: ll[1], r });
+    hoverPts.push({ lat: ll[0], lng: ll[1], r, i });            // i = original record index, for replay event mapping
     prevLL = ll; pgx = r.x; pgy = r.y; pgt = r.t; seenT.add(r.transport); kept++;
   }
   flush();
+
+  // Where each kept point landed in the replay sequence, keyed by original record index.
+  const seqPos = new Map(); hoverPts.forEach((p, si) => seqPos.set(p.i, si));
+  const events = []; // {pos, ll, kind, label} — markers the replay reveals as the playhead arrives
 
   // Death markers: exact (F_DEAD) drawn solid, inferred (respawn-rewind) hollow/dashed.
   for (const d of computeDeaths(recs)) {
@@ -290,14 +328,18 @@ function render(data, doFit) {
     const ll = gameToLatLng(recs[d.idx].x, recs[d.idx].y);
     // Inferred spots (respawn-rewind, no dead flag) are normally within a sample of the real
     // death spot, so they share the exact marker's look; the tooltip keeps the distinction.
-    deaths.push(L.circleMarker(ll, { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85 })
-      .bindTooltip(d.exact ? '💀 died here' : '💀 died here (approx)'));
+    const label = d.exact ? '💀 died here' : '💀 died here (approx)';
+    deaths.push(L.circleMarker(ll, { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85 }).bindTooltip(label));
+    if (seqPos.has(d.idx)) events.push({ pos: seqPos.get(d.idx), ll, kind: 'death', label });
   }
   // Marker at the most recent point — where you left off.
   const last = recs[recs.length - 1];
   const lastMarker = last ? L.circleMarker(gameToLatLng(last.x, last.y),
     { radius: 6, color: '#e8c25a', weight: 2, fillColor: '#caa233', fillOpacity: .9 }).bindTooltip('📍 last position') : null;
-  pathLayer = L.layerGroup([...teleports, ...lines, ...deaths, ...(lastMarker ? [lastMarker] : [])]).addTo(map);
+  if (lastMarker) events.push({ pos: hoverPts.length - 1, ll: gameToLatLng(last.x, last.y), kind: 'last', label: '📍 last position' });
+  pathLayer = L.layerGroup([...teleports, ...lines]).addTo(map);
+  // Event markers live in their own layer so the replay can hide them and reveal them on arrival.
+  markerLayer = L.layerGroup([...deaths, ...(lastMarker ? [lastMarker] : [])]).addTo(map);
 
   if (doFit && hoverPts.length) map.fitBounds(L.latLngBounds(hoverPts.map(p => [p.lat, p.lng])), { padding: [40, 40], maxZoom: 6 });
 
@@ -305,6 +347,7 @@ function render(data, doFit) {
   document.getElementById('stats').innerHTML =
     `<b>${kept.toLocaleString()}</b>/${recs.length.toLocaleString()} pts · <b>${sessions}</b> session(s) · <b>${deaths.length}</b> 💀 · v${version}`;
   renderLegend(mode, seenT, R);
+  initReplay(mode, R, events); // (re)arm the replay over the points kept by the current filters, colored to match
 }
 
 // --- Hover: show the nearest recorded point's details -------------------------
@@ -332,6 +375,128 @@ function showHover() {
   hoverBox.style.left = (lastEvt.containerPoint.x + 14) + 'px';
   hoverBox.style.top = (lastEvt.containerPoint.y + 14) + 'px';
 }
+
+// --- Replay -------------------------------------------------------------------
+// Walks a marker along the recorded points in RECORDING ORDER (not by the in-game clock, which
+// freezes in cutscenes, leaps hours at mission skips, and steps backward at scripted clock-sets).
+// The points are reused straight from hoverPts, so the replay honours the same filters as the
+// track (hidden cutscenes, hidden post-reload branches). A "scene cut" between two points — a
+// backward time jump, a session start, or a fast-travel-sized hop — just teleports the marker and
+// breaks the trail behind it, exactly like the static track.
+const rp = { seq: [], idx: 0, playing: false, marker: null, trail: null, raf: 0, last: 0,
+             mode: 'transport', R: null, drawn: -1, line: null, lineCol: null,
+             dist: [0], elapsed: [0], trans: [0], events: [], staticHidden: false };
+const rpEl = {
+  bar: document.getElementById('replay'), play: document.getElementById('rp-play'),
+  scrub: document.getElementById('rp-scrub'), speed: document.getElementById('rp-speed'),
+  clock: document.getElementById('rp-clock'),
+};
+map.createPane('replay'); map.getPane('replay').style.zIndex = 650; // above the static track's overlay pane
+const rpIsCut = (a, b) => b.r.t < a.r.t || (b.r.flags & F_SEGMENT_START) || Math.hypot(b.r.x - a.r.x, b.r.y - a.r.y) > TELEPORT_UNITS;
+const rpFmtDist = u => u >= 1000 ? `${(u / 1000).toFixed(1)} km` : `${Math.round(u)} m`; // game units ~ metres
+function rpFmtDur(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
+const rpEVENT_STYLE = {
+  death: { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85, pane: 'replay' },
+  last:  { radius: 6, color: '#e8c25a', weight: 2, fillColor: '#caa233', fillOpacity: .9, pane: 'replay' },
+};
+// Grow the trail point-by-point in the active color mode: extend the current run, or start a new
+// colored polyline on a color change (connected) or a scene cut (broken). Forward steps append;
+// a backward scrub rebuilds from the start (rare, so the O(n) redraw is fine).
+function rpResetTrail() { rp.trail.clearLayers(); rp.drawn = -1; rp.line = null; rp.lineCol = null; }
+function rpExtendTo(i) {
+  if (i < rp.drawn) rpResetTrail();
+  for (let j = rp.drawn + 1; j <= i; j++) {
+    const p = rp.seq[j], ll = [p.lat, p.lng], col = colorOf(p.r, rp.mode, rp.R);
+    const cut = j > 0 && rpIsCut(rp.seq[j - 1], rp.seq[j]);
+    if (!rp.line || cut || col !== rp.lineCol) {
+      const start = (!cut && j > 0) ? [[rp.seq[j - 1].lat, rp.seq[j - 1].lng], ll] : [ll]; // connect across color change
+      rp.line = L.polyline(start, { color: col, weight: 3.4, opacity: .98, pane: 'replay' }).addTo(rp.trail);
+      rp.lineCol = col;
+    } else rp.line.addLatLng(ll);
+  }
+  rp.drawn = i;
+}
+// Reveal the death / last-position markers as the playhead reaches them (and re-hide on rewind).
+// While a replay is "active" we hide the static marker layer so upcoming deaths aren't spoiled;
+// when parked at the very start we show the static markers and clear the revealed ones.
+function rpReveal(i, active) {
+  if (active && markerLayer && !rp.staticHidden) { map.removeLayer(markerLayer); rp.staticHidden = true; }
+  if (!active && markerLayer && rp.staticHidden) { markerLayer.addTo(map); rp.staticHidden = false; }
+  for (const e of rp.events) {
+    const want = active && e.pos <= i;
+    if (want && !e.shown) {
+      e.marker.addTo(map); e.shown = true;
+      e.marker.setRadius(11); setTimeout(() => e.marker && e.marker.setRadius(rpEVENT_STYLE[e.kind].radius), 160); // pop
+    } else if (!want && e.shown) { map.removeLayer(e.marker); e.shown = false; }
+  }
+}
+function rpDraw() {
+  const i = Math.min(Math.round(rp.idx), rp.seq.length - 1);
+  if (i < 0) return;
+  const p = rp.seq[i], ll = [p.lat, p.lng], r = p.r;
+  rpExtendTo(i);
+  rp.marker.setLatLng(ll).setStyle({ fillColor: colorOf(r, rp.mode, rp.R) }); // playhead shows the current color value
+  rpEl.scrub.value = i;
+  const active = rp.playing || i > 0;
+  rpEl.clock.innerHTML =
+    `<b>${fmtTime(r.t)}</b><br>` +
+    `<span class="sub">${(T[r.transport] || ['?'])[0]} · honor ${r.honor} · $${r.cash} · ${CHARS[r.character] || '?'}</span><br>` +
+    `<span class="sub">~${rpFmtDist(rp.dist[i])} · ${rpFmtDur(rp.elapsed[i])} in-game · ${rp.trans[i]} transitions</span>`;
+  rpReveal(i, active);
+  map.getContainer().classList.toggle('replaying', active); // fade static track once under way
+  if (rp.playing && !map.getBounds().pad(-0.12).contains(ll)) map.panTo(ll, { animate: true, duration: .4 });
+}
+function rpTick(now) {
+  if (!rp.playing) return;
+  const dt = (now - rp.last) / 1000; rp.last = now;
+  rp.idx += (+rpEl.speed.value) * Math.min(dt, .1); // points/sec; clamp dt so a tab-switch can't skip ahead
+  if (rp.idx >= rp.seq.length - 1) { rp.idx = rp.seq.length - 1; rpDraw(); rpPause(); return; }
+  rpDraw();
+  rp.raf = requestAnimationFrame(rpTick);
+}
+function rpPlay() {
+  if (rp.seq.length < 2) return;
+  if (rp.idx >= rp.seq.length - 1) { rp.idx = 0; rpResetTrail(); } // restart from the top if parked at the end
+  rp.playing = true; rpEl.play.textContent = '⏸'; rp.last = performance.now();
+  rp.raf = requestAnimationFrame(rpTick);
+}
+function rpPause() { rp.playing = false; rpEl.play.textContent = '▶'; cancelAnimationFrame(rp.raf); }
+function initReplay(mode, R, events) {
+  rpPause();
+  const prevIdx = rp.idx, prevLen = rp.seq.length;
+  rp.seq = hoverPts.slice(); rp.mode = mode; rp.R = R;
+  if (rp.trail) { map.removeLayer(rp.trail); rp.trail = null; }
+  if (rp.marker) { map.removeLayer(rp.marker); rp.marker = null; }
+  for (const e of rp.events) if (e.shown) map.removeLayer(e.marker); // clear any revealed markers from the prior render
+  rp.events = []; rp.staticHidden = false;
+  if (rp.seq.length < 2) { rp.idx = 0; rpEl.bar.classList.remove('show'); map.getContainer().classList.remove('replaying'); return; }
+  // Cumulative trip stats per point: distance ridden, "lived" in-game time (mission skips excluded),
+  // and transport changes. Precomputed once so playback just indexes them.
+  rp.dist = [0]; rp.elapsed = [0]; rp.trans = [0];
+  for (let i = 1; i < rp.seq.length; i++) {
+    const a = rp.seq[i - 1], b = rp.seq[i], cut = rpIsCut(a, b), dt = b.r.t - a.r.t;
+    rp.dist[i]    = rp.dist[i - 1]    + (cut ? 0 : Math.hypot(b.r.x - a.r.x, b.r.y - a.r.y));
+    rp.elapsed[i] = rp.elapsed[i - 1] + (!cut && dt > 0 && dt <= TRIP_TIME_CAP ? dt : 0);
+    rp.trans[i]   = rp.trans[i - 1]   + (!cut && b.r.transport !== a.r.transport ? 1 : 0);
+  }
+  rp.events = (events || []).map(e => ({ ...e, marker: L.circleMarker(e.ll, rpEVENT_STYLE[e.kind]).bindTooltip(e.label), shown: false }));
+  // Keep your spot when only the color mode/filters changed the styling, not the point count.
+  rp.idx = (prevLen === rp.seq.length) ? Math.min(prevIdx, rp.seq.length - 1) : 0;
+  rp.trail = L.layerGroup().addTo(map); rpResetTrail();
+  rp.marker = L.circleMarker([rp.seq[0].lat, rp.seq[0].lng],
+    { radius: 7, color: '#fff', weight: 2, fillColor: '#e8c25a', fillOpacity: 1, pane: 'replay' }).addTo(map);
+  rpEl.scrub.max = rp.seq.length - 1;
+  rpEl.bar.classList.add('show');
+  rpDraw();
+}
+rpEl.play.addEventListener('click', () => rp.playing ? rpPause() : rpPlay());
+rpEl.scrub.addEventListener('input', () => { rpPause(); rp.idx = +rpEl.scrub.value; rpDraw(); });
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && rpEl.bar.classList.contains('show') && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
+    e.preventDefault(); rp.playing ? rpPause() : rpPlay();
+  }
+});
 
 // --- File loading -------------------------------------------------------------
 function loadFile(file) {
