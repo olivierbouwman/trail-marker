@@ -78,9 +78,10 @@ const T = {
   3: ['train',   '#c0c4cc'], 4: ['balloon', '#b06bd6'], 5: ['swim',    '#36cfd0'],
   6: ['other',   '#e0863a'],
 };
-const F_SEGMENT_START = 0x20, F_DEAD = 0x10, F_COMBAT = 0x04;
+const F_SEGMENT_START = 0x20, F_DEAD = 0x10, F_COMBAT = 0x04, F_NONGAMEPLAY = 0x01;
 const TELEPORT_UNITS = 300; // jumps larger than this between points = fast-travel/teleport, not real travel
 const CLOCKSET_MAX_MOVE = 30; // a backward time jump with under this much movement = stayed in place (see computeDeaths)
+const CUTSCENE_RUN = 3; // consecutive non-gameplay records that mark a sustained cutscene, not a death's brief fade
 const FLAG_NAMES = ['non-gameplay', 'keepalive', 'combat', 'wanted', 'dead', 'segment_start', 'orphaned'];
 const flagNames = f => FLAG_NAMES.filter((_, i) => f & (1 << i)).join(', ') || 'none';
 
@@ -201,16 +202,24 @@ function computeOrphans(recs) {
 //
 // Caveat the rewind signal alone can't resolve: a story mission that needs a particular time of
 // day ALSO rewinds the clock backward (always to a round hour) with no segment_start — looks
-// exactly like a respawn by the time jump. The tell is movement: a death respawns you at a
-// doctor/camp/checkpoint (a real position warp), while a mission clock-set leaves you standing
-// where you are. So we suppress a rewind only when it has NO death evidence at all — no F_DEAD
-// in the dying-run window, no combat at the rewind, and you barely moved. Any warp keeps the
-// marker, so non-combat deaths (a fall, a train, drowning — all of which still respawn you
-// elsewhere) survive. We deliberately do NOT trust the cutscene flag here: it can't tell a
-// story cutscene from the death camera (both are "non-gameplay camera"), and it was inert across
-// a whole real death-containing session, whereas the position warp held up in every log.
-// Verified against real logs: clears RDR2's opening-chapter phantom deaths without dropping a
-// single F_DEAD- or warp-confirmed death.
+// exactly like a respawn by the time jump. We separate the two with death evidence and two
+// behavioural tells:
+//   1. Movement. A death respawns you at a doctor/camp/checkpoint (a real position warp); a
+//      stationary clock-set leaves you standing where you are. So a tiny move = a clock-set.
+//   2. A sustained cutscene. A chapter-transition montage (e.g. the ride out of Colter into
+//      Ch.2) rewinds the clock AND relocates you forward along the journey — so it warps, which
+//      tell #1 alone would misread as a death. But it stays inside a long non-gameplay run,
+//      whereas a real death hands control back to gameplay right after the respawn. So a rewind
+//      whose landing sits in a run of >= CUTSCENE_RUN non-gameplay records is scripted, not a
+//      death — even when it moved you a long way.
+// We suppress only when there is NO death evidence (no F_DEAD in the dying-run window, no combat
+// at the rewind) AND one of those tells holds. Any warp that lands back in gameplay is kept, so
+// non-combat deaths (a fall, a train, drowning — all of which still respawn you elsewhere)
+// survive. The cutscene flag is best-effort (it was inert in one older log); that's why it only
+// ever adds suppressions on top of the movement test, never removes a death the other signals
+// caught. Verified against real logs: clears RDR2's opening chapters (stationary clock-sets and
+// the Ch.1->2 travel montage) with zero false deaths, while retaining every F_DEAD/combat/warp
+// death in a separate 12-death session.
 function computeDeaths(recs) {
   const out = [], claimed = new Set();
   for (let i = 1; i < recs.length; i++) {
@@ -222,7 +231,9 @@ function computeDeaths(recs) {
       if (recs[j].flags & F_DEAD) { if (k < 0) k = j; claimed.add(j); }
     const combat = (recs[i - 1].flags & F_COMBAT) || (recs[i].flags & F_COMBAT);
     const moved = Math.hypot(recs[i].x - recs[i - 1].x, recs[i].y - recs[i - 1].y);
-    if (k < 0 && !combat && moved <= CLOCKSET_MAX_MOVE) continue; // mission clock-set, not a death
+    let cutscene = true;                                       // landing inside a sustained cutscene?
+    for (let j = i; j < i + CUTSCENE_RUN; j++) cutscene = cutscene && j < recs.length && (recs[j].flags & F_NONGAMEPLAY);
+    if (k < 0 && !combat && (moved <= CLOCKSET_MAX_MOVE || cutscene)) continue; // scripted clock-set/montage, not a death
     out.push({ idx: k >= 0 ? k : i - 1, exact: k >= 0 });
   }
   // Unclaimed dead flags = deaths with no respawn after them. One marker per dying-run.
