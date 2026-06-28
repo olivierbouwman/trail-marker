@@ -6,7 +6,7 @@ It runs in the background and logs your position and a little context (about onc
 [size=4][b]Installation instructions[/b][/size]
 [list=1]
 [*]Install [b]ScriptHookRDR2 V2[/b] (download from its official source — not bundled here): its loader (e.g. dinput8.dll) and ScriptHookRDR2.dll.[/*]
-[*]Download [b]TrailMarker.asi[/b] from the Files tab and copy it into your RDR2 folder (the one with RDR2.exe), alongside ScriptHook.[/*]
+[*]Download from the Files tab and extract [b]TrailMarker.asi[/b] from the archive, then copy it into your RDR2 folder (the one with RDR2.exe), alongside ScriptHook. (Mod managers like Vortex handle the extraction for you.)[/*]
 [*]Launch the game and play. Your log is written to [b]TrailMarker.bin[/b] in that same folder.[/*]
 [/list]
 To view it, open the web viewer above and drag TrailMarker.bin onto the page. The hosted viewer is always the latest version; if you'd rather run it offline, grab a local copy from the GitHub repo. To stop logging, just remove TrailMarker.asi.
@@ -31,7 +31,8 @@ To view it, open the web viewer above and drag TrailMarker.bin onto the page. Th
 
 [size=4][b]Shout outs[/b][/size]
 [list]
-[*][b]Alexander Blade[/b] — for ScriptHookRDR2 V2, the runtime this plugs into.[/*]
+[*][b]kepmehz[/b] — for [url=https://www.nexusmods.com/reddeadredemption2/mods/1472]ScriptHookRDR2 V2[/url], the runtime this plugs into.[/*]
+[*][b]Alexander Blade[/b] — for the original ScriptHookRDR2 and its API, which V2 builds on.[/*]
 [*][b]alloc8or[/b] — for the RDR3 native database.[/*]
 [*][b]femga / rdr3_discoveries[/b] — for the vehicle list used to classify how you're traveling.[/*]
 [*][b]Rockstar Games[/b] — for the in-game map tiles the viewer draws on.[/*]

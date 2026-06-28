@@ -136,7 +136,8 @@ rebuild and commit the refreshed `TrailMarker.asi` alongside your source change.
 
 ## Credits
 
-- **ScriptHookRDR2 V2** — the scripting runtime this mod plugs into.
+- **kepmehz** — [ScriptHookRDR2 V2](https://www.nexusmods.com/reddeadredemption2/mods/1472), the scripting runtime this mod plugs into.
+- **Alexander Blade** — the original ScriptHookRDR2 and its API, which V2 builds on.
 - **alloc8or** — the RDR3 native database (function hashes).
 - **femga/rdr3_discoveries** — the vehicle model list used to classify transport.
 - **Rockstar Games** — the in-game map tiles the web viewer draws on.

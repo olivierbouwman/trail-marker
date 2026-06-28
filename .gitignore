@@ -10,3 +10,6 @@
 
 # macOS
 .DS_Store
+
+# Nexus release artifact (regenerable from TrailMarker.asi + nexusmods-zip-readme.txt)
+TrailMarker-*.zip
