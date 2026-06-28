@@ -139,10 +139,11 @@ rebuild and commit the refreshed `TrailMarker.asi` alongside your source change.
 - **ScriptHookRDR2 V2** — the scripting runtime this mod plugs into.
 - **alloc8or** — the RDR3 native database (function hashes).
 - **femga/rdr3_discoveries** — the vehicle model list used to classify transport.
+- **Rockstar Games** — the in-game map tiles the web viewer draws on.
 - **Jean Ropke** — the coordinate transform/projection used by the web viewer to map
-  game positions onto the in-game map (from the [RDR2 Collectors Map](https://jeanropke.github.io/RDR2CollectorsMap/)).
-- **Leaflet** (BSD-2-Clause) — the mapping library the web viewer is built on. Map tiles
-  are served by Rockstar Games.
+  game positions onto those tiles (from the [RDR2 Collectors Map](https://jeanropke.github.io/RDR2CollectorsMap/)).
+- **Leaflet** (BSD-2-Clause) — the mapping library the web viewer is built on.
+- Built with **Claude** (Anthropic's AI) as a coding partner.
 
 ## Changelog
 
