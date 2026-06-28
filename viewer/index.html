@@ -179,7 +179,7 @@ const mapBounds = L.latLngBounds(L.latLng(-144, 0), L.latLng(0, 176));
 const map = L.map('map', { crs: L.CRS.Simple, minZoom: 2, maxZoom: 7 });
 L.tileLayer('https://s.rsg.sc/sc/images/games/RDR2/map/game/{z}/{x}/{y}.jpg', {
   minZoom: 2, maxZoom: 7, bounds: mapBounds, noWrap: true,
-  attribution: 'Map © <a href="https://www.rockstargames.com/">Rockstar Games</a> · tiles via Jean Ropke'
+  attribution: 'Map © <a href="https://www.rockstargames.com/">Rockstar Games</a>'
 }).addTo(map);
 map.setView([-72, 88], 3);
 

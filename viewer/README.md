@@ -1,7 +1,7 @@
 # Trail Marker Viewer
 
 A static, no-server web viewer for `TrailMarker.bin` logs. Renders your travelled path
-on the RDR2 map (Jean Ropke tiles). Hostable on GitHub Pages as-is.
+on the RDR2 map (Rockstar Games tiles). Hostable on GitHub Pages as-is.
 
 ## Use
 

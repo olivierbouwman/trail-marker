@@ -1,0 +1,44 @@
+[size=4][b]Description[/b][/size]
+Trail Marker quietly records where you go in Red Dead Redemption 2 while you play, then lets you see your whole journey drawn on the map.
+It runs in the background and logs your position and a little context (about once a second) to a tiny file. No menus, no hotkeys, nothing to configure — install it once and forget it's there. Later, drop your log onto the web viewer and watch your playthrough unfold: how you traveled, where you fought and died, your honor rising and falling, and your wallet over time.
+[b]Web viewer (no install):[/b] [url=https://olivierbouwman.github.io/trail-marker/]olivierbouwman.github.io/trail-marker[/url] — your data is read entirely in your browser, nothing is ever uploaded.
+
+[size=4][b]Installation instructions[/b][/size]
+[list=1]
+[*]Install [b]ScriptHookRDR2 V2[/b] (download from its official source — not bundled here): its loader (e.g. dinput8.dll) and ScriptHookRDR2.dll.[/*]
+[*]Download [b]TrailMarker.asi[/b] from the Files tab and copy it into your RDR2 folder (the one with RDR2.exe), alongside ScriptHook.[/*]
+[*]Launch the game and play. Your log is written to [b]TrailMarker.bin[/b] in that same folder.[/*]
+[/list]
+To view it, open the web viewer above and drag TrailMarker.bin onto the page. The hosted viewer is always the latest version; if you'd rather run it offline, grab a local copy from the GitHub repo. To stop logging, just remove TrailMarker.asi.
+
+[size=4][b]Main features[/b][/size]
+[list]
+[*][b]Set-and-forget logging[/b] — runs in the background, no menus or hotkeys, nothing to configure.[/*]
+[*][b]Smart sampling[/b] — records a point when you've actually moved, plus an occasional point while you're still, so travel is captured densely and idle time stays tiny.[/*]
+[*][b]Transport mode[/b] for every point: on foot, horse, boat, train, balloon, swimming, or other vehicles.[/*]
+[*][b]Context[/b] — in combat, wanted by the law, deaths, cutscenes, plus your honor, character (Arthur / John), and cash.[/*]
+[*][b]Save-aware[/b] — marks session boundaries so the viewer can separate save branches and pinpoint where you died.[/*]
+[*][b]Tiny and safe[/b] — a compact binary log (~65 MB even after 1000 hours), flushed continuously so a crash costs almost nothing.[/*]
+[*][b]Free web viewer[/b] — see your trails on the RDR2 map, colored by transport, honor, money, or combat, with death markers and filters.[/*]
+[/list]
+
+[size=4][b]Requirements[/b][/size]
+[list]
+[*]Red Dead Redemption 2 (PC, [b]Story Mode only[/b] — do not use mods in RDR Online).[/*]
+[*][b]ScriptHookRDR2 V2[/b], matching your game version. Tested on RDR2 build [b]1491.50[/b].[/*]
+[/list]
+[i]Heads-up:[/i] some antivirus flags .asi/ScriptHook plugins as a false positive. Trail Marker is open source — build it yourself if you'd rather. Use at your own risk.
+
+[size=4][b]Shout outs[/b][/size]
+[list]
+[*][b]Alexander Blade[/b] — for ScriptHookRDR2 V2, the runtime this plugs into.[/*]
+[*][b]alloc8or[/b] — for the RDR3 native database.[/*]
+[*][b]femga / rdr3_discoveries[/b] — for the vehicle list used to classify how you're traveling.[/*]
+[*][b]Rockstar Games[/b] — for the in-game map tiles the viewer draws on.[/*]
+[*][b]Jean Ropke[/b] — for the coordinate transform that maps game positions onto those tiles.[/*]
+[*][b]Leaflet[/b] — the open-source mapping library the web viewer is built on.[/*]
+[*]Built with [b]Claude[/b] (Anthropic's AI) as a coding partner.[/*]
+[*]Everyone in the RDR2 modding community who shares knowledge and tools.[/*]
+[/list]
+
+[i]Open source, public domain (The Unlicense): [url=https://github.com/olivierbouwman/trail-marker]github.com/olivierbouwman/trail-marker[/url][/i]
