@@ -25,11 +25,21 @@
   .leaflet-container { background: #11140f; }
   /* One GPU drop-shadow over the whole vector pane = a dark halo behind every track/marker so
      colored lines stay legible on light terrain. No extra geometry, unlike a per-line casing. */
-  .leaflet-overlay-pane svg { filter: drop-shadow(0 0 1.5px rgba(0,0,0,.95)); }
+  .leaflet-overlay-pane svg { filter: drop-shadow(0 0 1px rgba(35,28,16,1)) drop-shadow(0 0 3px rgba(66,52,28,.35)); }
   /* Replay draws in its own pane above the track; the same halo keeps it legible. While a replay
      is in progress we fade the static track so the growing colored trail reads as "where I've been". */
-  .leaflet-replay-pane svg { filter: drop-shadow(0 0 1.5px rgba(0,0,0,.95)); }
+  .leaflet-replay-pane svg { filter: drop-shadow(0 0 1px rgba(35,28,16,1)) drop-shadow(0 0 3px rgba(66,52,28,.35)); }
   .replaying .leaflet-overlay-pane { opacity: .3; transition: opacity .25s; }
+  /* Death mark: a small ink cross ("X marks the spot") instead of a modern UI pin. A fixed-size
+     div icon repositions via a cheap CSS transform on pan/zoom (no path geometry to recompute),
+     so it stays legible at every zoom and cheap even with hundreds of them. */
+  .death-mark { width: 12px; height: 12px; }
+  .death-mark i { display: block; width: 100%; height: 100%; position: relative;
+    filter: drop-shadow(0 0 1px rgba(35,28,16,.9)); transition: transform .16s ease-out; }
+  .death-mark i::before, .death-mark i::after { content: ''; position: absolute; top: 50%; left: 50%;
+    width: 14px; height: 2px; border-radius: 1px; background: #7a0000; }
+  .death-mark i::before { transform: translate(-50%,-50%) rotate(45deg); }
+  .death-mark i::after  { transform: translate(-50%,-50%) rotate(-45deg); }
   #hover {
     position: absolute; z-index: 1200; display: none; pointer-events: none;
     background: rgba(20,22,16,.94); color: #e8e2d0; border: 1px solid #6b5d3e;
@@ -68,7 +78,7 @@
   <div style="margin-top:8px;">Color by:
     <select id="colormode">
       <option value="transport">Transport</option>
-      <option value="honor">Honor</option>
+      <option value="honor" selected>Honor</option>
       <option value="cash">Money</option>
       <option value="combat">Combat</option>
     </select>
@@ -77,7 +87,8 @@
     <label><input type="checkbox" id="f-cutscene"> hide cutscenes</label><br>
     <label><input type="checkbox" id="f-mission"> hide mission travel</label><br>
     <label><input type="checkbox" id="f-orphan" checked> hide post-reload branches</label><br>
-    <label><input type="checkbox" id="f-teleport" checked> hide fast-travel jumps</label>
+    <label><input type="checkbox" id="f-teleport" checked> hide fast-travel jumps</label><br>
+    <label><input type="checkbox" id="f-death" checked> hide death markers</label>
   </div>
   <div id="stats"></div>
   <div id="legend"></div>
@@ -104,12 +115,17 @@
 // (east). This matches the reference collectors map, so it needs no hand-calibration.
 const CAL = { s: 0.01552, offLat: -63.6, offLng: 111.29 };
 const gameToLatLng = (x, y) => [ CAL.s * y + CAL.offLat, CAL.s * x + CAL.offLng ];
+// Shared icon instance — same object reused for every death marker, static or replay.
+const DEATH_ICON = L.divIcon({ className: 'death-mark', html: '<i></i>', iconSize: [12, 12], iconAnchor: [6, 6] });
 
 // --- Transport palette --------------------------------------------------------
+// Horse and foot cover the vast majority of records, so they get calm, desaturated map-ink tones
+// that don't dominate the view; boat/train/balloon/swim/other are rare, so they get more saturated
+// accent hues that pop out of the sea of horse-brown when they do appear.
 const T = {
-  0: ['foot',    '#9aa0a6'], 1: ['horse',   '#c8924a'], 2: ['boat',    '#3d8bd4'],
-  3: ['train',   '#c0c4cc'], 4: ['balloon', '#b06bd6'], 5: ['swim',    '#36cfd0'],
-  6: ['other',   '#e0863a'],
+  0: ['foot',    '#9a8f7f'], 1: ['horse',   '#a77244'], 2: ['boat',    '#3484b2'],
+  3: ['train',   '#5e46a4'], 4: ['balloon', '#bc4ebc'], 5: ['swim',    '#38947d'],
+  6: ['other',   '#b25334'],
 };
 const F_SEGMENT_START = 0x20, F_DEAD = 0x10, F_COMBAT = 0x04, F_NONGAMEPLAY = 0x01, F_MISSION = 0x80;
 const TELEPORT_UNITS = 300; // jumps larger than this between points = fast-travel/teleport, not real travel
@@ -151,13 +167,30 @@ function dataRanges(recs) {
   return R;
 }
 const qnorm = (v, min, max) => max <= min ? 0.5 : Math.round((v - min) / (max - min) * 24) / 24; // quantized 0..1
-const ramp = (t, h0, h1) => `hsl(${(h0 + (h1 - h0) * t).toFixed(0)},72%,52%)`;
+// Sequential ramps as 3-stop HSL lerps: lightness always rises stop-to-stop (not just hue), so the
+// low/high ends stay distinguishable for colorblind users, and every stop is a map-ink/coinage tone
+// instead of a saturated web default.
+// Honor: dark oxblood (dishonorable) -> parchment tan -> warm gold (honest).
+const HONOR_STOPS = [[8, 55, 26], [38, 28, 52], [46, 78, 62]];
+// Cash: dull pewter (broke) -> copper/bronze (comfortable) -> the same warm gold as honor's high end,
+// so gold reads consistently as "the good outcome" across both views.
+const CASH_STOPS = [[30, 10, 36], [25, 55, 45], [46, 78, 62]];
+const rampStops = (stops, t) => {
+  const n = stops.length - 1, seg = Math.min(Math.floor(t * n), n - 1), u = t * n - seg;
+  const [h0, s0, l0] = stops[seg], [h1, s1, l1] = stops[seg + 1];
+  const lerp = (a, b) => a + (b - a) * u;
+  return `hsl(${lerp(h0, h1).toFixed(0)},${lerp(s0, s1).toFixed(0)}%,${lerp(l0, l1).toFixed(0)}%)`;
+};
+// Combat: vivid blood-red vs. a clearly saturated steel/denim blue. The near-black slate tried
+// before collided with the map's own dark border-line ink; a real hue+saturation signal (not just
+// "dark and desaturated") keeps peaceful distinct from both the map's borders and the red.
+const COMBAT_COLOR = '#dd5540', PEACEFUL_COLOR = '#467191';
 function colorOf(r, mode, R) {
   switch (mode) {
-    case 'honor':  return ramp(qnorm(r.honor, R.hMin, R.hMax), 0, 120);   // red (low) -> green (high)
-    case 'cash':   return ramp(qnorm(r.cash, R.cMin, R.cMax), 210, 0);    // blue (low) -> red (high)
-    case 'combat': return (r.flags & 0x04) ? '#ff3b3b' : '#5a6b3a';
-    default:       return (T[r.transport] || ['', '#fff'])[1];            // transport
+    case 'honor':  return rampStops(HONOR_STOPS, qnorm(r.honor, R.hMin, R.hMax));  // oxblood (low) -> gold (high)
+    case 'cash':   return rampStops(CASH_STOPS, qnorm(r.cash, R.cMin, R.cMax));    // pewter (low) -> gold (high)
+    case 'combat': return (r.flags & 0x04) ? COMBAT_COLOR : PEACEFUL_COLOR;
+    default:       return (T[r.transport] || ['', '#fff'])[1];                    // transport
   }
 }
 function renderLegend(mode, seenT, R) {
@@ -165,11 +198,10 @@ function renderLegend(mode, seenT, R) {
   if (mode === 'transport')
     lg.innerHTML = [...seenT].sort((a, b) => a - b).map(t => `<span><i style="background:${(T[t] || ['', '#fff'])[1]}"></i>${(T[t] || ['?'])[0]}</span>`).join('');
   else if (mode === 'combat')
-    lg.innerHTML = `<span><i style="background:#ff3b3b"></i>in combat</span> <span><i style="background:#5a6b3a"></i>peaceful</span>`;
+    lg.innerHTML = `<span><i style="background:${COMBAT_COLOR}"></i>in combat</span> <span><i style="background:${PEACEFUL_COLOR}"></i>peaceful</span>`;
   else {
-    const [lo, hi, h0, h1, label] = mode === 'honor' ? [R.hMin, R.hMax, 0, 120, 'honor']
-      : [R.cMin, R.cMax, 210, 0, 'cash $'];
-    const grad = `linear-gradient(to right, ${ramp(0, h0, h1)}, ${ramp(.5, h0, h1)}, ${ramp(1, h0, h1)})`;
+    const [stops, lo, hi, label] = mode === 'honor' ? [HONOR_STOPS, R.hMin, R.hMax, 'honor'] : [CASH_STOPS, R.cMin, R.cMax, 'cash $'];
+    const grad = `linear-gradient(to right, ${rampStops(stops, 0)}, ${rampStops(stops, .5)}, ${rampStops(stops, 1)})`;
     lg.innerHTML = `${label}: ${lo} <span style="display:inline-block;width:90px;height:11px;border-radius:2px;vertical-align:middle;background:${grad}"></span> ${hi}`;
   }
   lg.style.display = 'block';
@@ -194,7 +226,13 @@ map.getPane('cartouche').style.zIndex = 640;
 // the text is drawn in the map's label colour (#4e473f) — so the cartouche already sits on the map's
 // own warm-grey ramp. Plain alpha compositing (no multiply/opacity tricks) renders those exact hues.
 
-let lastData = null, pathLayer = null, markerLayer = null, hoverPts = [];
+let lastData = null, pathLayer = null, markerLayer = null, hoverPts = [], trailLines = [];
+// Thinner zoomed out (so 1000 hours of overlapping trail doesn't read as a solid blob at the world
+// view), thicker zoomed in (so an individual route stays legible). Just a weight-attribute sweep on
+// existing polylines, not a geometry rebuild, so it's cheap even with thousands of them.
+const ZOOM_WEIGHT = { 2: 1.6, 3: 2.4, 4: 2.8, 5: 3.2, 6: 3.6, 7: 4 };
+const weightForZoom = z => ZOOM_WEIGHT[Math.max(2, Math.min(7, Math.round(z)))] ?? 2.4;
+map.on('zoomend', () => { const w = weightForZoom(map.getZoom()); for (const l of trailLines) l.setStyle({ weight: w }); });
 
 // --- Binary parsing -----------------------------------------------------------
 function parseBin(buf) {
@@ -461,6 +499,7 @@ function render(data, doFit) {
   const exCut = document.getElementById('f-cutscene').checked;
   const exMission = document.getElementById('f-mission').checked;
   const showJumps = !document.getElementById('f-teleport').checked;
+  const exDeath = document.getElementById('f-death').checked;
   const orph = document.getElementById('f-orphan').checked ? computeOrphans(recs) : null;
 
   const lines = [], deaths = [], teleports = [];
@@ -468,7 +507,10 @@ function render(data, doFit) {
   let run = [], runC = null, prevLL = null, pgx = null, pgy = null, pgt = null, kept = 0;
   // Contrast against light terrain comes from a single drop-shadow on the whole vector pane
   // (see CSS), so each run is just one polyline — no geometry doubling.
-  const flush = () => { if (run.length > 1) lines.push(L.polyline(run, { color: runC, weight: 2.4, opacity: .95 })); };
+  // Opacity under 1 lets retraced roads compound into a darker, heavier-looking mark where
+  // overlapping runs stack — a free "well-worn trail" effect, same polyline count either way.
+  const zoomW = weightForZoom(map.getZoom());
+  const flush = () => { if (run.length > 1) lines.push(L.polyline(run, { color: runC, weight: zoomW, opacity: .65 })); };
   const seenT = new Set();
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
@@ -482,7 +524,7 @@ function render(data, doFit) {
     const teleport = prevLL && pgx !== null && Math.hypot(r.x - pgx, r.y - pgy) > TELEPORT_UNITS;
     if ((r.flags & F_SEGMENT_START) || teleport || respawn) {               // session boundary, fast-travel jump, or respawn
       flush();
-      if (teleport && !respawn && showJumps) teleports.push(L.polyline([prevLL, ll], { color: '#9a9a9a', weight: 1, opacity: .5, dashArray: '4 7' }));
+      if (teleport && !respawn && showJumps) teleports.push(L.polyline([prevLL, ll], { color: '#8a7a54', weight: 1, opacity: .5, dashArray: '4 7' }));
       run = [ll]; runC = col;
     } else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; } // color change: connect
     else run.push(ll);
@@ -496,16 +538,17 @@ function render(data, doFit) {
   const events = []; // {pos, ll, kind, label} — markers the replay reveals as the playhead arrives
 
   // Death markers: exact (F_DEAD) drawn solid, inferred (respawn-rewind) hollow/dashed.
-  for (const d of computeDeaths(recs)) {
+  if (!exDeath) for (const d of computeDeaths(recs)) {
     if ((exCut && (recs[d.idx].flags & 0x01)) || (exMission && (recs[d.idx].flags & F_MISSION)) || (orph && orph[d.idx])) continue; // hidden by a filter
     const ll = gameToLatLng(recs[d.idx].x, recs[d.idx].y);
     // Inferred spots (respawn-rewind, no dead flag) are normally within a sample of the real
     // death spot, so they share the exact marker's look; the tooltip keeps the distinction.
     const label = d.exact ? '💀 died here' : '💀 died here (approx)';
-    deaths.push(L.circleMarker(ll, { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85 }).bindTooltip(label));
+    deaths.push(L.marker(ll, { icon: DEATH_ICON }).bindTooltip(label));
     if (seqPos.has(d.idx)) events.push({ pos: seqPos.get(d.idx), ll, kind: 'death', label });
   }
   pathLayer = L.layerGroup([...teleports, ...lines]).addTo(map);
+  trailLines = lines; // so the zoomend listener can re-weight just the main trail, not the teleport dashes
   // Death markers live in their own layer so the replay can hide them and reveal them on arrival.
   markerLayer = L.layerGroup([...deaths]).addTo(map);
 
@@ -570,7 +613,7 @@ const rpFmtDist = u => u >= 1000 ? `${(u / 1000).toFixed(1)} km` : `${Math.round
 function rpFmtDur(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
 const rpEVENT_STYLE = {
-  death: { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85, pane: 'replay' },
+  death: { icon: DEATH_ICON, pane: 'replay' },
 };
 // Grow the trail point-by-point in the active color mode: extend the current run, or start a new
 // colored polyline on a color change (connected) or a scene cut (broken). Forward steps append;
@@ -599,7 +642,9 @@ function rpReveal(i, active) {
     const want = active && e.pos <= i;
     if (want && !e.shown) {
       e.marker.addTo(map); e.shown = true;
-      e.marker.setRadius(11); setTimeout(() => e.marker && e.marker.setRadius(rpEVENT_STYLE[e.kind].radius), 160); // pop
+      // Pop the cross on reveal — scale the inner <i>, not the outer icon div Leaflet positions.
+      const mark = e.marker.getElement()?.querySelector('i');
+      if (mark) { mark.style.transform = 'scale(1.8)'; setTimeout(() => { mark.style.transform = ''; }, 160); }
     } else if (!want && e.shown) { map.removeLayer(e.marker); e.shown = false; }
   }
 }
@@ -653,7 +698,7 @@ function initReplay(mode, R, events) {
     rp.elapsed[i] = rp.elapsed[i - 1] + (!cut && dt > 0 && dt <= TRIP_TIME_CAP ? dt : 0);
     rp.trans[i]   = rp.trans[i - 1]   + (!cut && b.r.transport !== a.r.transport ? 1 : 0);
   }
-  rp.events = (events || []).map(e => ({ ...e, shown: false, marker: L.circleMarker(e.ll, rpEVENT_STYLE[e.kind]).bindTooltip(e.label) }));
+  rp.events = (events || []).map(e => ({ ...e, shown: false, marker: L.marker(e.ll, rpEVENT_STYLE[e.kind]).bindTooltip(e.label) }));
   // Keep your spot when only the color mode/filters changed the styling, not the point count.
   rp.idx = (prevLen === rp.seq.length) ? Math.min(prevIdx, rp.seq.length - 1) : 0;
   rp.trail = L.layerGroup().addTo(map); rpResetTrail();
@@ -681,7 +726,7 @@ function loadFile(file) {
   fr.readAsArrayBuffer(file);
 }
 document.getElementById('file').addEventListener('change', e => e.target.files[0] && loadFile(e.target.files[0]));
-['colormode', 'f-cutscene', 'f-mission', 'f-orphan', 'f-teleport'].forEach(id =>
+['colormode', 'f-cutscene', 'f-mission', 'f-orphan', 'f-teleport', 'f-death'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => { if (lastData) render(lastData, false); }));
 const drop = document.getElementById('drop');
 window.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('show'); });
