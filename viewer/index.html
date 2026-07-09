@@ -10,15 +10,48 @@
   #map { position: absolute; inset: 0; background: #11140f; }
   #panel {
     position: absolute; top: 12px; left: 12px; z-index: 1000;
-    background: rgba(20,22,16,.88); color: #e8e2d0; padding: 12px 14px;
-    border: 1px solid #6b5d3e; border-radius: 6px; font-size: 13px; max-width: 280px;
+    background: rgba(20,22,16,.9); color: #e8e2d0; padding: 10px 14px 12px;
+    border: 1px solid #6b5d3e; border-radius: 8px; font-size: 13px; max-width: 280px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.4);
+    color-scheme: dark; /* native widgets (unchecked boxes, select dropdown) render dark, not white */
   }
-  #panel h1 { font-size: 15px; margin: 0 0 6px; letter-spacing: .04em; }
+  #panel .title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  #panel h1 { font-size: 15px; margin: 0; letter-spacing: .04em; }
+  #panel-toggle {
+    flex: none; width: 22px; height: 22px; padding: 0; cursor: pointer; font-size: 11px; line-height: 1;
+    border: 1px solid #6b5d3e; border-radius: 4px; background: #2a2c20; color: #b3a982;
+  }
+  #panel-toggle:hover { background: #353826; color: #e8e2d0; }
+  #panel.collapsed .panel-body { display: none; }
+  #panel section { margin-top: 8px; padding-top: 8px; border-top: 1px solid #4a4128; }
+  #panel section:has(> #stats:empty) { display: none; } /* nothing loaded yet — no bare divider */
   #panel .hint { color: #b3a982; }
-  #stats { margin-top: 8px; line-height: 1.5; }
-  #legend { margin-top: 8px; padding-top: 8px; border-top: 1px solid #4a4128; display: none; }
-  #legend span { display: inline-block; margin: 2px 6px 2px 0; }
-  #legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: middle; margin-right: 3px; }
+  #panel select {
+    background: #2a2c20; color: #e8e2d0; border: 1px solid #6b5d3e; border-radius: 4px;
+    padding: 3px 4px; font-size: 12px;
+  }
+  #panel .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; }
+  /* The native file input stays in the tree (label-for opens the picker, the change
+     listener still fires); only its default white chip is hidden. */
+  #file { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+  .file-btn {
+    display: inline-block; margin-top: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px;
+    background: #2a2c20; color: #e8c25a; border: 1px solid #6b5d3e; border-radius: 4px;
+  }
+  .file-btn:hover { background: #353826; }
+  #panel .filters { margin-top: 6px; }
+  #panel .filters .group-label { color: #b3a982; margin-bottom: 2px; }
+  #panel .filters label { display: block; padding: 2px 0; cursor: pointer; user-select: none; }
+  #panel input[type=checkbox] { accent-color: #caa233; vertical-align: -2px; margin: 0 5px 0 0; }
+  #stats { line-height: 1.5; }
+  #stats .dim { color: #b3a982; font-weight: normal; }
+  #legend { margin-top: 6px; display: none; }
+  #legend span { display: inline-flex; align-items: center; margin: 2px 8px 2px 0; }
+  #legend i { width: 11px; height: 11px; border-radius: 2px; margin-right: 4px; border: 1px solid #4a4128; box-sizing: border-box; }
+  #legend .ramp {
+    display: inline-block; width: 90px; height: 11px; border-radius: 2px; vertical-align: middle;
+    margin: 0 4px; border: 1px solid #4a4128; box-sizing: border-box;
+  }
   #drop { position: absolute; inset: 0; z-index: 1500; display: none; background: rgba(10,12,8,.7);
     color: #ffe; align-items: center; justify-content: center; font-size: 22px; border: 3px dashed #c9b277; pointer-events: none; }
   #drop.show { display: flex; }
@@ -47,21 +80,16 @@
     font-family: ui-monospace, monospace; max-width: 240px;
   }
   #hover b { color: #e8c25a; }
-  #replay {
-    position: absolute; left: 50%; transform: translateX(-50%); bottom: 16px; z-index: 1100;
-    display: none; align-items: center; gap: 10px; width: min(620px, calc(100% - 32px));
-    background: rgba(20,22,16,.92); color: #e8e2d0; padding: 9px 13px;
-    border: 1px solid #6b5d3e; border-radius: 8px; font-size: 13px;
-  }
-  #replay.show { display: flex; }
+  #replay { display: none; }
+  #replay.show { display: block; }
+  #replay .rp-row { display: flex; align-items: center; gap: 8px; }
   #replay button {
-    flex: none; width: 34px; height: 34px; border-radius: 50%; cursor: pointer;
-    border: 1px solid #6b5d3e; background: #2a2c20; color: #e8c25a; font-size: 15px; line-height: 1;
+    flex: none; width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+    border: 1px solid #6b5d3e; background: #2a2c20; color: #e8c25a; font-size: 13px; line-height: 1;
   }
   #replay button:hover { background: #353826; }
   #rp-scrub { flex: 1 1 auto; min-width: 60px; accent-color: #caa233; cursor: pointer; }
-  #rp-speed { flex: none; background: #2a2c20; color: #e8e2d0; border: 1px solid #6b5d3e; border-radius: 4px; padding: 3px 4px; }
-  #rp-clock { flex: none; min-width: 196px; text-align: right; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.35; }
+  #rp-clock { margin-top: 6px; font-family: ui-monospace, monospace; font-size: 11.5px; line-height: 1.45; }
   #rp-clock b { color: #e8c25a; }
   #rp-clock .sub { color: #b3a982; }
 </style>
@@ -69,43 +97,58 @@
 <body>
 <div id="map"></div>
 <div id="panel">
-  <h1>🤠 Trail Marker</h1>
-  <div class="hint">Drag a <code>TrailMarker.bin</code> onto the page, or:</div>
-  <input id="file" type="file" accept=".bin" />
-  <div id="sample-note" class="hint" style="display:none; margin-top:6px;">
-    Showing <strong>sample data</strong> — drop your own <code>TrailMarker.bin</code> to replace it.
+  <div class="title-row">
+    <h1>🤠 Trail Marker</h1>
+    <button id="panel-toggle" title="Collapse panel">▾</button>
   </div>
-  <div style="margin-top:8px;">Color by:
-    <select id="colormode">
-      <option value="transport">Transport</option>
-      <option value="honor" selected>Honor</option>
-      <option value="cash">Money</option>
-      <option value="combat">Combat</option>
-    </select>
+  <div class="panel-body">
+    <section>
+      <div class="hint">Drag a <code>TrailMarker.bin</code> onto the page, or:</div>
+      <input id="file" type="file" accept=".bin" />
+      <label for="file" class="file-btn">Choose file…</label>
+      <div id="sample-note" class="hint" style="display:none; margin-top:6px;">
+        Showing <strong>sample data</strong> — drop your own <code>TrailMarker.bin</code> to replace it.
+      </div>
+    </section>
+    <section>
+      <label class="row">Color by
+        <select id="colormode">
+          <option value="honor" selected>Honor</option>
+          <option value="transport">Transport</option>
+          <option value="cash">Money</option>
+          <option value="combat">Combat</option>
+        </select>
+      </label>
+      <div class="filters">
+        <div class="group-label">Show:</div>
+        <label><input type="checkbox" id="f-cutscene" checked> cutscenes</label>
+        <label><input type="checkbox" id="f-mission" checked> mission travel</label>
+        <label><input type="checkbox" id="f-orphan"> post-reload branches</label>
+        <label><input type="checkbox" id="f-teleport"> fast-travel jumps</label>
+        <label><input type="checkbox" id="f-death"> death markers</label>
+      </div>
+    </section>
+    <section>
+      <div id="stats"></div>
+      <div id="legend"></div>
+    </section>
+    <section id="replay">
+      <div class="rp-row">
+        <button id="rp-play" title="Play / pause replay (space)">▶</button>
+        <input id="rp-scrub" type="range" min="0" max="0" value="0" step="1" />
+        <select id="rp-speed" title="Replay speed (points per second)">
+          <option value="20">1×</option>
+          <option value="40" selected>2×</option>
+          <option value="80">4×</option>
+          <option value="160">8×</option>
+        </select>
+      </div>
+      <div id="rp-clock"></div>
+    </section>
   </div>
-  <div style="margin-top:6px;">
-    <label><input type="checkbox" id="f-cutscene"> hide cutscenes</label><br>
-    <label><input type="checkbox" id="f-mission"> hide mission travel</label><br>
-    <label><input type="checkbox" id="f-orphan" checked> hide post-reload branches</label><br>
-    <label><input type="checkbox" id="f-teleport" checked> hide fast-travel jumps</label><br>
-    <label><input type="checkbox" id="f-death" checked> hide death markers</label>
-  </div>
-  <div id="stats"></div>
-  <div id="legend"></div>
 </div>
 <div id="drop">Drop TrailMarker.bin to load</div>
 <div id="hover"></div>
-<div id="replay">
-  <button id="rp-play" title="Play / pause replay (space)">▶</button>
-  <input id="rp-scrub" type="range" min="0" max="0" value="0" step="1" />
-  <select id="rp-speed" title="Replay speed (points per second)">
-    <option value="20">1×</option>
-    <option value="40" selected>2×</option>
-    <option value="80">4×</option>
-    <option value="160">8×</option>
-  </select>
-  <div id="rp-clock"></div>
-</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -202,7 +245,7 @@ function renderLegend(mode, seenT, R) {
   else {
     const [stops, lo, hi, label] = mode === 'honor' ? [HONOR_STOPS, R.hMin, R.hMax, 'honor'] : [CASH_STOPS, R.cMin, R.cMax, 'cash $'];
     const grad = `linear-gradient(to right, ${rampStops(stops, 0)}, ${rampStops(stops, .5)}, ${rampStops(stops, 1)})`;
-    lg.innerHTML = `${label}: ${lo} <span style="display:inline-block;width:90px;height:11px;border-radius:2px;vertical-align:middle;background:${grad}"></span> ${hi}`;
+    lg.innerHTML = `${label}: ${lo} <span class="ramp" style="background:${grad}"></span> ${hi}`;
   }
   lg.style.display = 'block';
 }
@@ -211,6 +254,7 @@ function renderLegend(mode, seenT, R) {
 const mapBounds = L.latLngBounds(L.latLng(-144, 0), L.latLng(0, 176));
 // Zoom control lives bottom-right: the default top-left spot sits under the #panel overlay.
 const map = L.map('map', { crs: L.CRS.Simple, minZoom: 2, maxZoom: 7, zoomControl: false });
+map.attributionControl.setPrefix(''); // drop Leaflet's own credit/flag; keep the Rockstar map credit below
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.tileLayer('https://s.rsg.sc/sc/images/games/RDR2/map/game/{z}/{x}/{y}.jpg', {
   minZoom: 2, maxZoom: 7, bounds: mapBounds, noWrap: true,
@@ -496,11 +540,11 @@ function render(data, doFit) {
   const { recs, version } = data;
   const mode = document.getElementById('colormode').value;
   const R = dataRanges(recs);
-  const exCut = document.getElementById('f-cutscene').checked;
-  const exMission = document.getElementById('f-mission').checked;
-  const showJumps = !document.getElementById('f-teleport').checked;
-  const exDeath = document.getElementById('f-death').checked;
-  const orph = document.getElementById('f-orphan').checked ? computeOrphans(recs) : null;
+  const exCut = !document.getElementById('f-cutscene').checked;
+  const exMission = !document.getElementById('f-mission').checked;
+  const showJumps = document.getElementById('f-teleport').checked;
+  const exDeath = !document.getElementById('f-death').checked;
+  const orph = document.getElementById('f-orphan').checked ? null : computeOrphans(recs);
 
   const lines = [], deaths = [], teleports = [];
   hoverPts = [];
@@ -561,7 +605,7 @@ function render(data, doFit) {
 
   const sessions = recs.filter(r => r.flags & F_SEGMENT_START).length || (recs.length ? 1 : 0);
   document.getElementById('stats').innerHTML =
-    `<b>${kept.toLocaleString()}</b>/${recs.length.toLocaleString()} pts · <b>${sessions}</b> session(s) · <b>${deaths.length}</b> 💀 · v${version}`;
+    `<b>${kept.toLocaleString()}</b><span class="dim">/${recs.length.toLocaleString()}</span> pts · <b>${sessions}</b> session(s) · <b>${deaths.length}</b> 💀 <span class="dim">· v${version}</span>`;
   renderLegend(mode, seenT, R);
   initReplay(mode, R, events); // (re)arm the replay over the points kept by the current filters, colored to match
 }
@@ -726,6 +770,12 @@ function loadFile(file) {
   fr.readAsArrayBuffer(file);
 }
 document.getElementById('file').addEventListener('change', e => e.target.files[0] && loadFile(e.target.files[0]));
+const panel = document.getElementById('panel'), panelToggle = document.getElementById('panel-toggle');
+panelToggle.addEventListener('click', () => {
+  const collapsed = panel.classList.toggle('collapsed');
+  panelToggle.textContent = collapsed ? '▸' : '▾';
+  panelToggle.title = collapsed ? 'Expand panel' : 'Collapse panel';
+});
 ['colormode', 'f-cutscene', 'f-mission', 'f-orphan', 'f-teleport', 'f-death'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => { if (lastData) render(lastData, false); }));
 const drop = document.getElementById('drop');
