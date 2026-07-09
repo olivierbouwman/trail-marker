@@ -13,3 +13,6 @@
 
 # Nexus release artifact (regenerable from TrailMarker.asi + nexusmods-zip-readme.txt)
 TrailMarker-*.zip
+
+# Browser-automation tool output (Playwright MCP snapshots/logs)
+.playwright-mcp/
