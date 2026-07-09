@@ -12,7 +12,8 @@ The file is little-endian, with an 8-byte header followed by fixed 18-byte recor
              int16  x, y, z        (world coord * 2; divide by 2 for units)
              uint8  transport      0 foot,1 horse,2 boat,3 train,4 balloon,5 swim,6 other_vehicle
              uint8  flags          bit0 non-gameplay, 1 keepalive, 2 combat, 3 wanted,
-                                   4 dead, 5 segment_start, 6 orphaned (set by tools)
+                                   4 dead, 5 segment_start, 6 orphaned (set by tools),
+                                   7 mission (inside a scripted story mission)
              int8   honor          -100..+100 (0 neutral)
              uint8  character      0 Arthur, 1 John, 2 other
              uint32 cash           whole dollars
@@ -22,7 +23,7 @@ import struct, sys
 HEADER = struct.Struct("<4sHH")     # 8 bytes
 RECORD = struct.Struct("<IhhhBBbBI")  # 18 bytes
 TRANSPORT = {0: "foot", 1: "horse", 2: "boat", 3: "train", 4: "balloon", 5: "swim", 6: "other"}
-FLAGS = ["nongameplay", "keepalive", "combat", "wanted", "dead", "segment_start", "orphaned"]
+FLAGS = ["nongameplay", "keepalive", "combat", "wanted", "dead", "segment_start", "orphaned", "mission"]
 
 
 def flag_names(f):

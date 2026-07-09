@@ -20,7 +20,7 @@
 
 // Mod version (distinct from the on-disk file-format version, which stays 1). `used` keeps it
 // past -O2/-s so it stays greppable: `strings TrailMarker.asi | grep -i trailmarker`.
-static const char TRAILMARKER_VERSION[] __attribute__((used)) = "TrailMarker 1.0.0";
+static const char TRAILMARKER_VERSION[] __attribute__((used)) = "TrailMarker 1.1.0";
 
 typedef uint64_t U64;
 typedef void (*ScriptMainFn)();
@@ -53,6 +53,7 @@ static const U64 H_IS_PLAYER_DEAD           = 0x2E9C3FCB6798F397ULL;
 static const U64 H_IS_PED_DEAD_OR_DYING     = 0x3317DEDB88C95038ULL;
 static const U64 H_IS_ENTITY_DEAD           = 0x7D5B1F88E7504BBAULL;
 static const U64 H_MONEY_GET_CASH_BALANCE   = 0x0C02DABFA3B98176ULL; // returns cents
+static const U64 H_GET_MISSION_FLAG         = 0xB15CD1CF58771DE1ULL; // RDR3 hash (not the GTA5 one)
 static const U64 H_GET_CLOCK_YEAR           = 0xE136DCA28C4A48BAULL;
 static const U64 H_GET_CLOCK_MONTH          = 0x2D44E8FC79EAB1ACULL;
 static const U64 H_GET_CLOCK_DAY            = 0xDF2FD796C54480A5ULL;
@@ -85,6 +86,7 @@ static bool     IS_GAMEPLAY_CAM_RENDERING()  { p_nativeInit(H_IS_GAMEPLAY_CAM_RE
 static bool     IS_PED_IN_COMBAT(int ped, int target) { p_nativeInit(H_IS_PED_IN_COMBAT); p_nativePush64((U64)ped); p_nativePush64((U64)target); return ((*p_nativeCall()) & 0xFF) != 0; }
 static int      GET_PLAYER_WANTED_LEVEL(int player) { p_nativeInit(H_GET_PLAYER_WANTED_LEVEL); p_nativePush64((U64)player); return (int)(*p_nativeCall()); }
 static int      MONEY_GET_CASH_BALANCE()     { return nv0_int(H_MONEY_GET_CASH_BALANCE); }
+static bool     GET_MISSION_FLAG()           { p_nativeInit(H_GET_MISSION_FLAG); return ((*p_nativeCall()) & 0xFF) != 0; }
 static unsigned GET_ENTITY_MODEL(int e)      { p_nativeInit(H_GET_ENTITY_MODEL); p_nativePush64((U64)e); return (unsigned)(*p_nativeCall()); }
 static int      GET_VEHICLE_PED_IS_IN(int p) { p_nativeInit(H_GET_VEHICLE_PED_IS_IN); p_nativePush64((U64)p); p_nativePush64(0); return (int)(*p_nativeCall()); }
 static Vector3  GET_ENTITY_COORDS(int e) {
@@ -179,6 +181,7 @@ enum {
     F_DEAD          = 0x10, // dead/dying (best-effort; see README)
     F_SEGMENT_START = 0x20, // first point of a session (game launch / savegame load)
     // 0x40 reserved (orphaned; set by post-processing tools)
+    F_MISSION       = 0x80, // inside a scripted mission (the game's "can't save now" lock)
 };
 
 static int16_t coord16(float v) {
@@ -273,6 +276,7 @@ static void ScriptMain() {
         if (GET_PLAYER_WANTED_LEVEL(player) > 0)                              flags |= F_WANTED;
         if (IS_PLAYER_DEAD(player) || IS_PED_DEAD_OR_DYING(ped) || IS_ENTITY_DEAD(ped)) flags |= F_DEAD;
         if (firstRecord)                                                      flags |= F_SEGMENT_START;
+        if (GET_MISSION_FLAG())                                               flags |= F_MISSION;
 
         int honor = readHonorRaw() * 100 / 320; // internal -320..+320 -> -100..+100
         if (honor > 100) honor = 100; else if (honor < -100) honor = -100;

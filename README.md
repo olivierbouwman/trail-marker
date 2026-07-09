@@ -88,7 +88,8 @@ offset (`recordCount = (fileSize − 8) / 18`) with no parsing.
 
 **Flag bits:** `1` non-gameplay (cutscene) · `2` keepalive · `4` combat · `8` wanted ·
 `16` dead/dying · `32` segment_start (first point of a launch or savegame load) ·
-`64` orphaned (reserved for tools, not written by the mod).
+`64` orphaned (reserved for tools, not written by the mod) ·
+`128` mission (inside a scripted story mission — the game's "can't save now" lock).
 
 **Notes for tool authors**
 
