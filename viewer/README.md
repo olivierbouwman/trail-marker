@@ -24,9 +24,11 @@ money / combat) with an adaptive legend, **death markers** (exact where the game
 death, plus ones inferred from respawns), and **hover details** (time, transport, honor, cash,
 flags).
 
-Filters: **hide cutscenes** (non-gameplay points), **hide post-reload branches** (records
-abandoned by a later savegame load), and **show fast-travel jumps** (large teleports — fast
-travel, ticketed trains — are split out of the track and drawn as faint dashed connectors).
+Filters: **hide cutscenes** (non-gameplay points), **hide mission travel** (points recorded
+inside a scripted mission), **hide post-reload branches** (records
+abandoned by a later savegame load), and **hide fast-travel jumps** (large teleports — fast
+travel, ticketed trains — are always split out of the track; uncheck to draw them as faint
+dashed connectors). Hide mission travel is off by default; the other two are on.
 Point count shows kept/total.
 
 ## Performance & large logs (known limitation)
@@ -68,3 +70,21 @@ These all work on the **existing** log — no new data needs to be captured:
 - **Honor & cash over time** — small sparkline charts: your moral arc and your wallet across
   the playthrough.
 - **Speed coloring** — a colour mode derived from position/time deltas (skipping teleports).
+- **Guarma** — needs new data, not just a viewer change. Rockstar's own map tiles (the
+  `s.rsg.sc` source we already use) don't draw Guarma at all: its real game coordinates were
+  checked against the tile grid and land on blank parchment, confirmed by fetching those
+  tiles directly (a control tile over Saint Denis at the same zoom shows real terrain art;
+  Guarma's tiles don't). So there's no way to place Guarma points on the main map as-is.
+  Preliminary approach once we have a `TrailMarker.bin` captured during the Guarma mission:
+  - Treat it as a separate inset, not part of the main CRS.Simple grid — same technique
+    already used for the cartouche (`L.imageOverlay` in its own pane), since Guarma's
+    coordinates don't reliably fall inside our current `mapBounds` and there's no drawn art
+    to line up against anyway.
+  - Source art: fan-made maps exist, e.g. reddead.fandom.com's `Guarma.jpg` (full island) and
+    `PartialGuarmaMapNEW.png` (looks like just the area actually walkable during the mission,
+    the rest being off-limits/scripted). Confirm licensing/attribution before embedding either.
+  - Calibration: our `CAL` transform was reverse-engineered against Jean Ropke's grid: Guarma
+    needs its own scale/offset (or just a hand-fit `L.latLngBounds`) worked out from a handful
+    of known in-game positions once we have real logged points to check against the art.
+  - The mission is heavily scripted/on-rails, so expect long non-gameplay/cutscene stretches
+    in the data — may be worth its own filter rather than reusing the mainland heuristics.

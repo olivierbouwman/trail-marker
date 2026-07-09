@@ -75,8 +75,9 @@
   </div>
   <div style="margin-top:6px;">
     <label><input type="checkbox" id="f-cutscene"> hide cutscenes</label><br>
-    <label><input type="checkbox" id="f-orphan"> hide post-reload branches</label><br>
-    <label><input type="checkbox" id="f-teleport" checked> show fast-travel jumps</label>
+    <label><input type="checkbox" id="f-mission"> hide mission travel</label><br>
+    <label><input type="checkbox" id="f-orphan" checked> hide post-reload branches</label><br>
+    <label><input type="checkbox" id="f-teleport" checked> hide fast-travel jumps</label>
   </div>
   <div id="stats"></div>
   <div id="legend"></div>
@@ -110,12 +111,12 @@ const T = {
   3: ['train',   '#c0c4cc'], 4: ['balloon', '#b06bd6'], 5: ['swim',    '#36cfd0'],
   6: ['other',   '#e0863a'],
 };
-const F_SEGMENT_START = 0x20, F_DEAD = 0x10, F_COMBAT = 0x04, F_NONGAMEPLAY = 0x01;
+const F_SEGMENT_START = 0x20, F_DEAD = 0x10, F_COMBAT = 0x04, F_NONGAMEPLAY = 0x01, F_MISSION = 0x80;
 const TELEPORT_UNITS = 300; // jumps larger than this between points = fast-travel/teleport, not real travel
 const CLOCKSET_MAX_MOVE = 30; // a backward time jump with under this much movement = stayed in place (see computeDeaths)
 const CUTSCENE_RUN = 3; // consecutive non-gameplay records that mark a sustained cutscene, not a death's brief fade
 const TRIP_TIME_CAP = 1800; // replay trip clock: count gaps up to 30 game-min as "lived"; longer = a mission time-skip
-const FLAG_NAMES = ['non-gameplay', 'keepalive', 'combat', 'wanted', 'dead', 'segment_start', 'orphaned'];
+const FLAG_NAMES = ['non-gameplay', 'keepalive', 'combat', 'wanted', 'dead', 'segment_start', 'orphaned', 'mission'];
 const flagNames = f => FLAG_NAMES.filter((_, i) => f & (1 << i)).join(', ') || 'none';
 
 // In-game time: seconds since in-game 1800-01-01 -> "YYYY-MM-DD HH:MM"
@@ -176,12 +177,22 @@ function renderLegend(mode, seenT, R) {
 
 // --- Map ----------------------------------------------------------------------
 const mapBounds = L.latLngBounds(L.latLng(-144, 0), L.latLng(0, 176));
-const map = L.map('map', { crs: L.CRS.Simple, minZoom: 2, maxZoom: 7 });
+// Zoom control lives bottom-right: the default top-left spot sits under the #panel overlay.
+const map = L.map('map', { crs: L.CRS.Simple, minZoom: 2, maxZoom: 7, zoomControl: false });
+L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.tileLayer('https://s.rsg.sc/sc/images/games/RDR2/map/game/{z}/{x}/{y}.jpg', {
   minZoom: 2, maxZoom: 7, bounds: mapBounds, noWrap: true,
   attribution: 'Map © <a href="https://www.rockstargames.com/">Rockstar Games</a>'
 }).addTo(map);
 map.setView([-72, 88], 3);
+// The cartouche is part of the map "paper", not window chrome: its own pane above the trail
+// (zIndex 640, below the replay pane at 650) so it pans and scales with the map like an
+// engraved map cartouche would. Its own pane keeps the overlay-pane drop-shadow filter off it.
+map.createPane('cartouche');
+map.getPane('cartouche').style.zIndex = 640;
+// The frame art is pre-recolored to the map's line colour (#ae987a) with alpha = ink intensity, and
+// the text is drawn in the map's label colour (#4e473f) — so the cartouche already sits on the map's
+// own warm-grey ramp. Plain alpha compositing (no multiply/opacity tricks) renders those exact hues.
 
 let lastData = null, pathLayer = null, markerLayer = null, hoverPts = [];
 
@@ -279,6 +290,167 @@ function computeDeaths(recs) {
   return out;
 }
 
+// --- Cartouche: an engraved map-credit block composed from the loaded file ----
+// Placed in the empty NW margin, anchored to map coords so it scales/pans with the map.
+// Text is derived entirely from the records (see KEEPSAKE_IDEAS.md): protagonist(s) ->
+// title; total distance ridden; in-game year span (days for short runs); and the honor
+// closing line (an arc when it shifts tiers, else a final-state phrase). Numbers are spelled
+// in prose, figures kept for years; any line whose data is missing is simply omitted.
+const CART_BOUNDS = L.latLngBounds([-79, 10], [-19, 55]); // SW,NE — ~3:4 to match the art, centred in the empty western margin
+// top/bottom bracket the frame's clear interior opening (measured from the art: the rounded panel
+// runs x 249–829, y 234–1234, centre x≈539); text is centred vertically between them. innerW is
+// that opening (~580 wide) minus ~55px margins each side — the width every line is fitted to, kept
+// clear of the beaded rule so even the long hero name reads with breathing room.
+const CART = { imgW: 1086, imgH: 1448, cx: 539, top: 420, bottom: 1048, innerW: 490,
+               ink: '#4e473f', font: "'Hoefler Text', Cochin, Baskerville, Georgia, 'Times New Roman', serif" };
+const NAME = { 0: 'ARTHUR MORGAN', 1: 'JOHN MARSTON' };
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+const ONES = ['zero','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve',
+  'thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen'];
+const TENS = ['','','twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'];
+function words999(n) {
+  let s = '';
+  if (n >= 100) { s += ONES[Math.floor(n / 100)] + ' hundred'; n %= 100; if (n) s += ' '; }
+  if (n >= 20) { s += TENS[Math.floor(n / 10)]; n %= 10; if (n) s += '-' + ONES[n]; }
+  else if (n > 0) s += ONES[n];
+  return s;
+}
+function numWords(n) {
+  n = Math.round(n);
+  if (n <= 0) return 'zero';
+  const th = Math.floor(n / 1000), rest = n % 1000;
+  return ((th ? words999(th) + ' thousand' + (rest ? ' ' : '') : '') + (rest ? words999(rest) : '')).trim();
+}
+const roundMiles = n => n < 20 ? Math.round(n) : n < 100 ? Math.round(n / 5) * 5 : n < 1000 ? Math.round(n / 10) * 10 : Math.round(n / 100) * 100;
+// Arthur (and John) begin the story as outlaws — that's the premise, so the keepsake takes the
+// outlaw start as given and reads the closing line straight from the FINAL honor tier: the arc is
+// always "from an outlaw to wherever he ended up". Elegiac frontier phrasing, prefixed "who " at use.
+const HTIER = [
+  { min: -1e9, fin: 'lived by the gun' },
+  { min: -60,  fin: "never left the outlaw's road" },
+  { min: -20,  fin: 'was part outlaw, part honest man' },
+  { min: 20,   fin: 'rose from an outlaw to a better man' },
+  { min: 60,   fin: 'rose from an outlaw to an honest man' },
+];
+const tierIdx = h => { let k = 0; for (let i = 0; i < HTIER.length; i++) if (h >= HTIER[i].min) k = i; return k; };
+function cartoucheText(recs) {
+  let minT = Infinity, maxT = -Infinity, endHonor = 0;
+  let dist = 0, pgx = null, pgy = null, pgt = null;
+  for (const r of recs) {
+    if (r.t > 0) { if (r.t < minT) minT = r.t; if (r.t > maxT) maxT = r.t; }
+    endHonor = r.honor; // final recorded honor — the endpoint of the arc (outlaw start is assumed)
+    if (pgx !== null) {
+      const cut = (r.flags & F_SEGMENT_START) || (pgt !== null && r.t < pgt) || Math.hypot(r.x - pgx, r.y - pgy) > TELEPORT_UNITS;
+      if (!cut) dist += Math.hypot(r.x - pgx, r.y - pgy);
+    }
+    pgx = r.x; pgy = r.y; pgt = r.t;
+  }
+  // protagonists in first-appearance order (exclude 'other' = 2)
+  const order = [];
+  { const seen = {}; for (let i = 0; i < recs.length; i++) { const c = recs[i].character; if ((c === 0 || c === 1) && !seen[c]) { seen[c] = 1; order.push(c); } } }
+  const names = order.length ? order.map(c => NAME[c]) : ['A DRIFTER'];
+  const nameLines = names.length <= 1 ? [names[0]] : [names[0] + ' &', names.slice(1).join(' & ')];
+
+  const body = [];
+  const miles = dist / 1609.34;
+  if (miles >= 1) body.push(cap(numWords(roundMiles(miles))) + ' miles');
+  if (isFinite(minT)) {
+    const y0 = civilFromDays(Math.floor(minT / 86400) + DAYS_1800)[0];
+    const y1 = civilFromDays(Math.floor(maxT / 86400) + DAYS_1800)[0];
+    const days = (maxT - minT) / 86400;
+    if (y1 > y0) body.push('in the years ' + y0 + '–' + y1 + ',');
+    else { if (days >= 1) body.push('over ' + numWords(days) + ' days,'); body.push('in the year ' + y0 + ','); }
+  }
+  body.push('who ' + HTIER[tierIdx(endHonor)].fin);
+  return { titleSmall: 'THE TRAIL OF', nameLines, body };
+}
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+let cartoucheLayer = null;
+function buildCartouche(recs) {
+  if (cartoucheLayer) { map.removeLayer(cartoucheLayer); cartoucheLayer = null; }
+  if (!recs || !recs.length) return;
+  const info = cartoucheText(recs);
+  const svg = document.createElementNS(SVGNS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${CART.imgW} ${CART.imgH}`);
+  const img = document.createElementNS(SVGNS, 'image');
+  img.setAttribute('href', 'assets/cartouche.png');
+  img.setAttributeNS('http://www.w3.org/1999/xlink', 'href', 'assets/cartouche.png'); // older renderers
+  img.setAttribute('x', 0); img.setAttribute('y', 0);
+  img.setAttribute('width', CART.imgW); img.setAttribute('height', CART.imgH);
+  img.setAttribute('preserveAspectRatio', 'none'); // colour is baked into the PNG (duotone + alpha); no filter needed
+  svg.appendChild(img);
+
+  const rows = [];
+  rows.push({ t: info.titleSmall, size: 48, ls: 8 });
+  // ls/ws open the bold name up a touch: Hoefler's bold word-space is tiny at this size, so without
+  // extra spacing "ARTHUR MORGAN" reads as one word. Both are absolute user units (survive shrink).
+  for (const n of info.nameLines) rows.push({ t: n, size: 84, weight: '600', kind: 'name', ls: 1.5, ws: 11 });
+  rows.push({ t: '— · —', size: 54, gapTop: 40, gap: 30 });
+  info.body.forEach((b, i) => rows.push({ t: b, size: 54, style: i === info.body.length - 1 ? 'italic' : 'normal' }));
+
+  const lh = 1.42;
+  let totalH = 0;
+  for (const r of rows) totalH += r.size * lh + (r.gapTop || 0) + (r.gap || 0);
+  let y = (CART.top + CART.bottom) / 2 - totalH / 2;
+  const nameNodes = [];
+  for (const r of rows) {
+    y += (r.gapTop || 0) + r.size * lh;
+    const t = document.createElementNS(SVGNS, 'text');
+    t.setAttribute('x', CART.cx); t.setAttribute('y', y - r.size * 0.32);
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('font-family', CART.font); t.setAttribute('fill', CART.ink);
+    t.setAttribute('font-size', r.size);
+    if (r.ls) t.setAttribute('letter-spacing', r.ls);
+    if (r.weight) t.setAttribute('font-weight', r.weight);
+    if (r.style) t.setAttribute('font-style', r.style);
+    t.textContent = r.t;
+    svg.appendChild(t);
+    if (r.kind === 'name') nameNodes.push(t);
+    y += (r.gap || 0);
+  }
+  cartoucheLayer = L.svgOverlay(svg, CART_BOUNDS, { pane: 'cartouche', interactive: false }).addTo(map);
+  // Fit every line inside the interior opening (CART.innerW). Prefer shrinking the type — down to
+  // 78% — so glyphs stay their natural shape; only squeeze letter spacing (textLength) as a last
+  // resort for a line still too long at the floor size.
+  const fit = (t, floor) => {
+    const nat = t.getComputedTextLength();
+    if (nat <= CART.innerW) return;
+    const fs = +t.getAttribute('font-size');
+    const shrunk = Math.max(fs * floor, fs * CART.innerW / nat);
+    if (shrunk < fs) t.setAttribute('font-size', shrunk);
+    if (t.getComputedTextLength() > CART.innerW) {
+      t.setAttribute('textLength', CART.innerW); t.setAttribute('lengthAdjust', 'spacingAndGlyphs');
+    }
+  };
+  const fitAll = () => {
+    // The name is the hero: size both name lines together off the widest one so they stay uniform.
+    if (nameNodes.length) {
+      const fs = +nameNodes[0].getAttribute('font-size');
+      const widest = Math.max(...nameNodes.map(n => n.getComputedTextLength()));
+      if (widest > CART.innerW) {
+        const shared = Math.max(fs * 0.7, fs * CART.innerW / widest);
+        nameNodes.forEach(n => n.setAttribute('font-size', shared));
+      }
+      nameNodes.forEach(n => fit(n, 0.7)); // still too wide (rare) → gentle squeeze
+    }
+    svg.querySelectorAll('text').forEach(t => { if (!nameNodes.includes(t)) fit(t, 0.78); });
+  };
+  // getComputedTextLength must measure against the *final* font, so wait until it's loaded — a
+  // system serif like Hoefler Text still resolves to a fallback for the first paint or two, and
+  // measuring then produces a nondeterministic (often over-shrunk or overflowing) fit. Preload the
+  // exact faces we draw, then fit; bail if a newer render replaced this layer meanwhile.
+  const mine = cartoucheLayer;
+  if (document.fonts && document.fonts.load) {
+    // Preload the exact faces we draw (single family per call — a comma-separated stack can fail to
+    // parse and silently skip the wait), then also gate on the global fonts-ready signal, then fit.
+    const faces = [];
+    for (const sz of ['44px', '48px', '76px']) for (const pfx of ['', 'italic ', '600 ']) faces.push(`${pfx}${sz} "Hoefler Text"`);
+    Promise.all(faces.map(f => document.fonts.load(f).catch(() => {}))).then(() => document.fonts.ready)
+      .then(() => { if (cartoucheLayer === mine) fitAll(); });
+  } else fitAll();
+}
+
 function render(data, doFit) {
   lastData = data;
   if (pathLayer) { map.removeLayer(pathLayer); pathLayer = null; }
@@ -287,7 +459,8 @@ function render(data, doFit) {
   const mode = document.getElementById('colormode').value;
   const R = dataRanges(recs);
   const exCut = document.getElementById('f-cutscene').checked;
-  const showJumps = document.getElementById('f-teleport').checked;
+  const exMission = document.getElementById('f-mission').checked;
+  const showJumps = !document.getElementById('f-teleport').checked;
   const orph = document.getElementById('f-orphan').checked ? computeOrphans(recs) : null;
 
   const lines = [], deaths = [], teleports = [];
@@ -299,7 +472,7 @@ function render(data, doFit) {
   const seenT = new Set();
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
-    if ((exCut && (r.flags & 0x01)) || (orph && orph[i])) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
+    if ((exCut && (r.flags & 0x01)) || (exMission && (r.flags & F_MISSION)) || (orph && orph[i])) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
     const ll = gameToLatLng(r.x, r.y);
     const col = colorOf(r, mode, R);
     // A death respawn rewinds in-game time and warps you elsewhere — often a short hop the
@@ -324,7 +497,7 @@ function render(data, doFit) {
 
   // Death markers: exact (F_DEAD) drawn solid, inferred (respawn-rewind) hollow/dashed.
   for (const d of computeDeaths(recs)) {
-    if ((exCut && (recs[d.idx].flags & 0x01)) || (orph && orph[d.idx])) continue; // hidden by a filter
+    if ((exCut && (recs[d.idx].flags & 0x01)) || (exMission && (recs[d.idx].flags & F_MISSION)) || (orph && orph[d.idx])) continue; // hidden by a filter
     const ll = gameToLatLng(recs[d.idx].x, recs[d.idx].y);
     // Inferred spots (respawn-rewind, no dead flag) are normally within a sample of the real
     // death spot, so they share the exact marker's look; the tooltip keeps the distinction.
@@ -332,16 +505,16 @@ function render(data, doFit) {
     deaths.push(L.circleMarker(ll, { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85 }).bindTooltip(label));
     if (seqPos.has(d.idx)) events.push({ pos: seqPos.get(d.idx), ll, kind: 'death', label });
   }
-  // Marker at the most recent point — where you left off.
-  const last = recs[recs.length - 1];
-  const lastMarker = last ? L.circleMarker(gameToLatLng(last.x, last.y),
-    { radius: 6, color: '#e8c25a', weight: 2, fillColor: '#caa233', fillOpacity: .9 }).bindTooltip('📍 last position') : null;
-  if (lastMarker) events.push({ pos: hoverPts.length - 1, ll: gameToLatLng(last.x, last.y), kind: 'last', label: '📍 last position' });
   pathLayer = L.layerGroup([...teleports, ...lines]).addTo(map);
-  // Event markers live in their own layer so the replay can hide them and reveal them on arrival.
-  markerLayer = L.layerGroup([...deaths, ...(lastMarker ? [lastMarker] : [])]).addTo(map);
+  // Death markers live in their own layer so the replay can hide them and reveal them on arrival.
+  markerLayer = L.layerGroup([...deaths]).addTo(map);
 
-  if (doFit && hoverPts.length) map.fitBounds(L.latLngBounds(hoverPts.map(p => [p.lat, p.lng])), { padding: [40, 40], maxZoom: 6 });
+  buildCartouche(recs); // engraved map-credit block in the NW margin, composed from this file
+  if (doFit && hoverPts.length) {
+    const fb = L.latLngBounds(hoverPts.map(p => [p.lat, p.lng]));
+    fb.extend(CART_BOUNDS); // frame the trail and the cartouche together, like a printed keepsake
+    map.fitBounds(fb, { padding: [40, 40], maxZoom: 6 });
+  }
 
   const sessions = recs.filter(r => r.flags & F_SEGMENT_START).length || (recs.length ? 1 : 0);
   document.getElementById('stats').innerHTML =
@@ -398,7 +571,6 @@ function rpFmtDur(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400
   return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
 const rpEVENT_STYLE = {
   death: { radius: 6, color: '#ff3b3b', weight: 2, fillColor: '#7a0000', fillOpacity: .85, pane: 'replay' },
-  last:  { radius: 6, color: '#e8c25a', weight: 2, fillColor: '#caa233', fillOpacity: .9, pane: 'replay' },
 };
 // Grow the trail point-by-point in the active color mode: extend the current run, or start a new
 // colored polyline on a color change (connected) or a scene cut (broken). Forward steps append;
@@ -417,7 +589,7 @@ function rpExtendTo(i) {
   }
   rp.drawn = i;
 }
-// Reveal the death / last-position markers as the playhead reaches them (and re-hide on rewind).
+// Reveal the death markers as the playhead reaches them (and re-hide on rewind).
 // While a replay is "active" we hide the static marker layer so upcoming deaths aren't spoiled;
 // when parked at the very start we show the static markers and clear the revealed ones.
 function rpReveal(i, active) {
@@ -439,6 +611,7 @@ function rpDraw() {
   rp.marker.setLatLng(ll).setStyle({ fillColor: colorOf(r, rp.mode, rp.R) }); // playhead shows the current color value
   rpEl.scrub.value = i;
   const active = rp.playing || i > 0;
+  rp.marker.setStyle({ opacity: active ? 1 : 0, fillOpacity: active ? 1 : 0 }); // hide the playhead at rest for a clean, marker-free keepsake view
   rpEl.clock.innerHTML =
     `<b>${fmtTime(r.t)}</b><br>` +
     `<span class="sub">${(T[r.transport] || ['?'])[0]} · honor ${r.honor} · $${r.cash} · ${CHARS[r.character] || '?'}</span><br>` +
@@ -480,7 +653,7 @@ function initReplay(mode, R, events) {
     rp.elapsed[i] = rp.elapsed[i - 1] + (!cut && dt > 0 && dt <= TRIP_TIME_CAP ? dt : 0);
     rp.trans[i]   = rp.trans[i - 1]   + (!cut && b.r.transport !== a.r.transport ? 1 : 0);
   }
-  rp.events = (events || []).map(e => ({ ...e, marker: L.circleMarker(e.ll, rpEVENT_STYLE[e.kind]).bindTooltip(e.label), shown: false }));
+  rp.events = (events || []).map(e => ({ ...e, shown: false, marker: L.circleMarker(e.ll, rpEVENT_STYLE[e.kind]).bindTooltip(e.label) }));
   // Keep your spot when only the color mode/filters changed the styling, not the point count.
   rp.idx = (prevLen === rp.seq.length) ? Math.min(prevIdx, rp.seq.length - 1) : 0;
   rp.trail = L.layerGroup().addTo(map); rpResetTrail();
@@ -508,7 +681,7 @@ function loadFile(file) {
   fr.readAsArrayBuffer(file);
 }
 document.getElementById('file').addEventListener('change', e => e.target.files[0] && loadFile(e.target.files[0]));
-['colormode', 'f-cutscene', 'f-orphan', 'f-teleport'].forEach(id =>
+['colormode', 'f-cutscene', 'f-mission', 'f-orphan', 'f-teleport'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => { if (lastData) render(lastData, false); }));
 const drop = document.getElementById('drop');
 window.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('show'); });
