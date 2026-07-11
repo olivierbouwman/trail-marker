@@ -6,8 +6,10 @@
 <title>Trail Marker — Viewer</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
-  html, body { margin: 0; height: 100%; background: #11140f; font-family: system-ui, sans-serif; }
-  #map { position: absolute; inset: 0; background: #11140f; }
+  html, body { margin: 0; height: 100%; background: #d3b790; font-family: system-ui, sans-serif; }
+  /* #d3b790 is the exact paper colour of the tile edges, so the area past the tiled
+     region reads as more of the same map paper instead of a black void. */
+  #map { position: absolute; inset: 0; background: #d3b790; }
   #panel {
     position: absolute; top: 12px; left: 12px; z-index: 1000;
     background: rgba(20,22,16,.9); color: #e8e2d0; padding: 10px 14px 12px;
@@ -24,13 +26,22 @@
   #panel-toggle:hover { background: #353826; color: #e8e2d0; }
   #panel.collapsed .panel-body { display: none; }
   #panel section { margin-top: 8px; padding-top: 8px; border-top: 1px solid #4a4128; }
-  #panel section:has(> #stats:empty) { display: none; } /* nothing loaded yet — no bare divider */
+  #panel section:has(> #legend:empty) { display: none; } /* nothing loaded yet — no bare divider */
   #panel .hint { color: #b3a982; }
   #panel select {
-    background: #2a2c20; color: #e8e2d0; border: 1px solid #6b5d3e; border-radius: 4px;
+    background: #2a2c20; color: #b3a982; border: 1px solid #6b5d3e; border-radius: 4px;
     padding: 3px 4px; font-size: 12px;
   }
   #panel .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; }
+  /* Segmented control: one always-on choice, all options visible at a glance. */
+  .seg { display: flex; width: fit-content; margin-top: 6px; border: 1px solid #6b5d3e; border-radius: 4px; overflow: hidden; }
+  .seg button {
+    padding: 4px 8px; font-size: 12px; cursor: pointer; line-height: 1.2;
+    background: #2a2c20; color: #b3a982; border: none; border-right: 1px solid #4a4128;
+  }
+  .seg button:last-child { border-right: none; }
+  .seg button:hover { background: #353826; color: #e8e2d0; }
+  .seg button.on { background: #4a4128; color: #e8c25a; }
   /* The native file input stays in the tree (label-for opens the picker, the change
      listener still fires); only its default white chip is hidden. */
   #file { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
@@ -40,12 +51,10 @@
   }
   .file-btn:hover { background: #353826; }
   #panel .filters { margin-top: 6px; }
-  #panel .filters .group-label { color: #b3a982; margin-bottom: 2px; }
-  #panel .filters label { display: block; padding: 2px 0; cursor: pointer; user-select: none; }
+  #panel .group-label { color: #b3a982; margin-bottom: 2px; }
+  #panel .filters label { display: block; padding: 2px 0; cursor: pointer; user-select: none; color: #b3a982; }
   #panel input[type=checkbox] { accent-color: #caa233; vertical-align: -2px; margin: 0 5px 0 0; }
-  #stats { line-height: 1.5; }
-  #stats .dim { color: #b3a982; font-weight: normal; }
-  #legend { margin-top: 6px; display: none; }
+  #legend { display: none; color: #b3a982; }
   #legend span { display: inline-flex; align-items: center; margin: 2px 8px 2px 0; }
   #legend i { width: 11px; height: 11px; border-radius: 2px; margin-right: 4px; border: 1px solid #4a4128; box-sizing: border-box; }
   #legend .ramp {
@@ -55,7 +64,7 @@
   #drop { position: absolute; inset: 0; z-index: 1500; display: none; background: rgba(10,12,8,.7);
     color: #ffe; align-items: center; justify-content: center; font-size: 22px; border: 3px dashed #c9b277; pointer-events: none; }
   #drop.show { display: flex; }
-  .leaflet-container { background: #11140f; }
+  .leaflet-container { background: #d3b790; }
   /* One GPU drop-shadow over the whole vector pane = a dark halo behind every track/marker so
      colored lines stay legible on light terrain. No extra geometry, unlike a per-line casing. */
   .leaflet-overlay-pane svg { filter: drop-shadow(0 0 1px rgba(35,28,16,1)) drop-shadow(0 0 3px rgba(66,52,28,.35)); }
@@ -111,25 +120,23 @@
       </div>
     </section>
     <section>
-      <label class="row">Color by
-        <select id="colormode">
-          <option value="honor" selected>Honor</option>
-          <option value="transport">Transport</option>
-          <option value="cash">Money</option>
-          <option value="combat">Combat</option>
-        </select>
-      </label>
+      <div class="group-label">Color by:</div>
+      <div id="colormode" class="seg">
+        <button data-mode="honor" class="on">Honor</button>
+        <button data-mode="transport">Transport</button>
+        <button data-mode="cash">Money</button>
+        <button data-mode="combat">Combat</button>
+      </div>
       <div class="filters">
         <div class="group-label">Show:</div>
-        <label><input type="checkbox" id="f-cutscene" checked> cutscenes</label>
-        <label><input type="checkbox" id="f-mission" checked> mission travel</label>
-        <label><input type="checkbox" id="f-orphan"> post-reload branches</label>
-        <label><input type="checkbox" id="f-teleport"> fast-travel jumps</label>
-        <label><input type="checkbox" id="f-death"> death markers</label>
+        <label><input type="checkbox" id="f-cutscene" checked> Cutscenes</label>
+        <label><input type="checkbox" id="f-mission" checked> Mission travel</label>
+        <label><input type="checkbox" id="f-orphan"> Post-reload branches</label>
+        <label><input type="checkbox" id="f-teleport"> Fast-travel jumps</label>
+        <label><input type="checkbox" id="f-death"> Death markers</label>
       </div>
     </section>
     <section>
-      <div id="stats"></div>
       <div id="legend"></div>
     </section>
     <section id="replay">
@@ -239,13 +246,13 @@ function colorOf(r, mode, R) {
 function renderLegend(mode, seenT, R) {
   const lg = document.getElementById('legend');
   if (mode === 'transport')
-    lg.innerHTML = [...seenT].sort((a, b) => a - b).map(t => `<span><i style="background:${(T[t] || ['', '#fff'])[1]}"></i>${(T[t] || ['?'])[0]}</span>`).join('');
+    lg.innerHTML = [...seenT].sort((a, b) => a - b).map(t => `<span><i style="background:${(T[t] || ['', '#fff'])[1]}"></i>${cap((T[t] || ['?'])[0])}</span>`).join('');
   else if (mode === 'combat')
-    lg.innerHTML = `<span><i style="background:${COMBAT_COLOR}"></i>in combat</span> <span><i style="background:${PEACEFUL_COLOR}"></i>peaceful</span>`;
+    lg.innerHTML = `<span><i style="background:${COMBAT_COLOR}"></i>In combat</span> <span><i style="background:${PEACEFUL_COLOR}"></i>Peaceful</span>`;
   else {
-    const [stops, lo, hi, label] = mode === 'honor' ? [HONOR_STOPS, R.hMin, R.hMax, 'honor'] : [CASH_STOPS, R.cMin, R.cMax, 'cash $'];
+    const [stops, lo, hi, label] = mode === 'honor' ? [HONOR_STOPS, R.hMin, R.hMax, 'Honor'] : [CASH_STOPS, R.cMin, R.cMax, 'Cash $'];
     const grad = `linear-gradient(to right, ${rampStops(stops, 0)}, ${rampStops(stops, .5)}, ${rampStops(stops, 1)})`;
-    lg.innerHTML = `${label}: ${lo} <span class="ramp" style="background:${grad}"></span> ${hi}`;
+    lg.innerHTML = `<span class="group-label">${label}:</span> ${lo} <span class="ramp" style="background:${grad}"></span> ${hi}`;
   }
   lg.style.display = 'block';
 }
@@ -253,7 +260,12 @@ function renderLegend(mode, seenT, R) {
 // --- Map ----------------------------------------------------------------------
 const mapBounds = L.latLngBounds(L.latLng(-144, 0), L.latLng(0, 176));
 // Zoom control lives bottom-right: the default top-left spot sits under the #panel overlay.
-const map = L.map('map', { crs: L.CRS.Simple, minZoom: 2, maxZoom: 7, zoomControl: false });
+// maxBounds (with full viscosity, a hard stop rather than rubber-banding) keeps the map from
+// being panned out of view; the pad leaves a margin of blank paper past the tiled region.
+const map = L.map('map', {
+  crs: L.CRS.Simple, minZoom: 2, maxZoom: 7, zoomControl: false,
+  maxBounds: mapBounds.pad(0.15), maxBoundsViscosity: 1.0,
+});
 map.attributionControl.setPrefix(''); // drop Leaflet's own credit/flag; keep the Rockstar map credit below
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.tileLayer('https://s.rsg.sc/sc/images/games/RDR2/map/game/{z}/{x}/{y}.jpg', {
@@ -266,7 +278,7 @@ map.setView([-72, 88], 3);
 // engraved map cartouche would. Its own pane keeps the overlay-pane drop-shadow filter off it.
 map.createPane('cartouche');
 map.getPane('cartouche').style.zIndex = 640;
-// The frame art is pre-recolored to the map's line colour (#ae987a) with alpha = ink intensity, and
+// The journal art is pre-recolored to the map's line colour (#ae987a) with alpha = ink intensity, and
 // the text is drawn in the map's label colour (#4e473f) — so the cartouche already sits on the map's
 // own warm-grey ramp. Plain alpha compositing (no multiply/opacity tricks) renders those exact hues.
 
@@ -379,11 +391,16 @@ function computeDeaths(recs) {
 // closing line (an arc when it shifts tiers, else a final-state phrase). Numbers are spelled
 // in prose, figures kept for years; any line whose data is missing is simply omitted.
 const CART_BOUNDS = L.latLngBounds([-79, 10], [-19, 55]); // SW,NE — ~3:4 to match the art, centred in the empty western margin
-// top/bottom bracket the frame's clear interior opening (measured from the art: the rounded panel
-// runs x 249–829, y 234–1234, centre x≈539); text is centred vertically between them. innerW is
-// that opening (~580 wide) minus ~55px margins each side — the width every line is fitted to, kept
-// clear of the beaded rule so even the long hero name reads with breathing room.
-const CART = { imgW: 1086, imgH: 1448, cx: 539, top: 420, bottom: 1048, innerW: 490,
+// The art comes from Arthur's actual journal sketches (game art, single-ink recolored by
+// make_cartouche.py): the "RIDING OUT" scene on top, and the pencil rule + steer head from
+// journal page 27 below. They're separate images flowed around the title text with fixed
+// gaps, so the bottom piece rides up or down with the amount of text (one vs two name lines,
+// missing body lines). w/h are display sizes in viewBox units; the aspect ratios come from
+// the trimmed assets (make_cartouche.py prints them). innerW keeps text lines narrower than
+// the scene above so the block reads as one column.
+const CART = { imgW: 1086, imgH: 1448, cx: 543, innerW: 620, gap: 84,
+               topArt: { href: 'assets/cartouche_top.png', w: 880, h: Math.round(880 / 1.7726) },
+               botArt: { href: 'assets/cartouche_bottom.png', w: 620, h: Math.round(620 / 2.4291) },
                ink: '#4e473f', font: "'Hoefler Text', Cochin, Baskerville, Georgia, 'Times New Roman', serif" };
 const NAME = { 0: 'ARTHUR MORGAN', 1: 'JOHN MARSTON' };
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
@@ -455,26 +472,38 @@ function buildCartouche(recs) {
   const info = cartoucheText(recs);
   const svg = document.createElementNS(SVGNS, 'svg');
   svg.setAttribute('viewBox', `0 0 ${CART.imgW} ${CART.imgH}`);
-  const img = document.createElementNS(SVGNS, 'image');
-  img.setAttribute('href', 'assets/cartouche.png');
-  img.setAttributeNS('http://www.w3.org/1999/xlink', 'href', 'assets/cartouche.png'); // older renderers
-  img.setAttribute('x', 0); img.setAttribute('y', 0);
-  img.setAttribute('width', CART.imgW); img.setAttribute('height', CART.imgH);
-  img.setAttribute('preserveAspectRatio', 'none'); // colour is baked into the PNG (duotone + alpha); no filter needed
-  svg.appendChild(img);
+  const placeArt = (art, y) => {
+    const img = document.createElementNS(SVGNS, 'image');
+    img.setAttribute('href', art.href);
+    img.setAttributeNS('http://www.w3.org/1999/xlink', 'href', art.href); // older renderers
+    img.setAttribute('x', CART.cx - art.w / 2); img.setAttribute('y', y);
+    img.setAttribute('width', art.w); img.setAttribute('height', art.h);
+    img.setAttribute('preserveAspectRatio', 'none'); // colour is baked into the PNG (duotone + alpha); no filter needed
+    svg.appendChild(img);
+  };
 
   const rows = [];
-  rows.push({ t: info.titleSmall, size: 48, ls: 8 });
+  rows.push({ t: info.titleSmall, size: 44, ls: 8 });
   // ls/ws open the bold name up a touch: Hoefler's bold word-space is tiny at this size, so without
   // extra spacing "ARTHUR MORGAN" reads as one word. Both are absolute user units (survive shrink).
-  for (const n of info.nameLines) rows.push({ t: n, size: 84, weight: '600', kind: 'name', ls: 1.5, ws: 11 });
-  rows.push({ t: '— · —', size: 54, gapTop: 40, gap: 30 });
-  info.body.forEach((b, i) => rows.push({ t: b, size: 54, style: i === info.body.length - 1 ? 'italic' : 'normal' }));
+  for (const n of info.nameLines) rows.push({ t: n, size: 78, weight: '600', kind: 'name', ls: 1.5, ws: 11 });
+  rows.push({ t: '— · —', size: 50, gapTop: 34, gap: 26 });
+  info.body.forEach((b, i) => rows.push({ t: b, size: 50, style: i === info.body.length - 1 ? 'italic' : 'normal' }));
 
   const lh = 1.42;
   let totalH = 0;
   for (const r of rows) totalH += r.size * lh + (r.gapTop || 0) + (r.gap || 0);
-  let y = (CART.top + CART.bottom) / 2 - totalH / 2;
+  // Flow art/text/art vertically, centred as a whole in the canvas. If a long text block
+  // would overflow, the art and gaps shrink together (never the text).
+  const artH = CART.topArt.h + CART.botArt.h + 2 * CART.gap;
+  const artScale = Math.min(1, (CART.imgH - 32 - totalH) / artH);
+  const topArt = { ...CART.topArt, w: CART.topArt.w * artScale, h: CART.topArt.h * artScale };
+  const botArt = { ...CART.botArt, w: CART.botArt.w * artScale, h: CART.botArt.h * artScale };
+  const gap = CART.gap * artScale;
+  let y = Math.max(16, (CART.imgH - (totalH + artH * artScale)) / 2);
+  placeArt(topArt, y);
+  y += topArt.h + gap;
+  const textEnd = y + totalH;
   const nameNodes = [];
   for (const r of rows) {
     y += (r.gapTop || 0) + r.size * lh;
@@ -491,6 +520,7 @@ function buildCartouche(recs) {
     if (r.kind === 'name') nameNodes.push(t);
     y += (r.gap || 0);
   }
+  placeArt(botArt, textEnd + gap);
   cartoucheLayer = L.svgOverlay(svg, CART_BOUNDS, { pane: 'cartouche', interactive: false }).addTo(map);
   // Fit every line inside the interior opening (CART.innerW). Prefer shrinking the type — down to
   // 78% — so glyphs stay their natural shape; only squeeze letter spacing (textLength) as a last
@@ -537,8 +567,8 @@ function render(data, doFit) {
   lastData = data;
   if (pathLayer) { map.removeLayer(pathLayer); pathLayer = null; }
   if (markerLayer) { map.removeLayer(markerLayer); markerLayer = null; }
-  const { recs, version } = data;
-  const mode = document.getElementById('colormode').value;
+  const { recs } = data;
+  const mode = document.querySelector('#colormode .on').dataset.mode;
   const R = dataRanges(recs);
   const exCut = !document.getElementById('f-cutscene').checked;
   const exMission = !document.getElementById('f-mission').checked;
@@ -548,7 +578,7 @@ function render(data, doFit) {
 
   const lines = [], deaths = [], teleports = [];
   hoverPts = [];
-  let run = [], runC = null, prevLL = null, pgx = null, pgy = null, pgt = null, kept = 0;
+  let run = [], runC = null, prevLL = null, pgx = null, pgy = null, pgt = null;
   // Contrast against light terrain comes from a single drop-shadow on the whole vector pane
   // (see CSS), so each run is just one polyline — no geometry doubling.
   // Opacity under 1 lets retraced roads compound into a darker, heavier-looking mark where
@@ -573,7 +603,7 @@ function render(data, doFit) {
     } else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; } // color change: connect
     else run.push(ll);
     hoverPts.push({ lat: ll[0], lng: ll[1], r, i });            // i = original record index, for replay event mapping
-    prevLL = ll; pgx = r.x; pgy = r.y; pgt = r.t; seenT.add(r.transport); kept++;
+    prevLL = ll; pgx = r.x; pgy = r.y; pgt = r.t; seenT.add(r.transport);
   }
   flush();
 
@@ -582,8 +612,13 @@ function render(data, doFit) {
   const events = []; // {pos, ll, kind, label} — markers the replay reveals as the playhead arrives
 
   // Death markers: exact (F_DEAD) drawn solid, inferred (respawn-rewind) hollow/dashed.
-  if (!exDeath) for (const d of computeDeaths(recs)) {
+  // Positions are collected for the replay's death tally even when the markers themselves
+  // are hidden — the checkbox controls map clutter, not the trip stats.
+  const deathPos = [];
+  for (const d of computeDeaths(recs)) {
     if ((exCut && (recs[d.idx].flags & 0x01)) || (exMission && (recs[d.idx].flags & F_MISSION)) || (orph && orph[d.idx])) continue; // hidden by a filter
+    if (seqPos.has(d.idx)) deathPos.push(seqPos.get(d.idx));
+    if (exDeath) continue;
     const ll = gameToLatLng(recs[d.idx].x, recs[d.idx].y);
     // Inferred spots (respawn-rewind, no dead flag) are normally within a sample of the real
     // death spot, so they share the exact marker's look; the tooltip keeps the distinction.
@@ -603,11 +638,8 @@ function render(data, doFit) {
     map.fitBounds(fb, { padding: [40, 40], maxZoom: 6 });
   }
 
-  const sessions = recs.filter(r => r.flags & F_SEGMENT_START).length || (recs.length ? 1 : 0);
-  document.getElementById('stats').innerHTML =
-    `<b>${kept.toLocaleString()}</b><span class="dim">/${recs.length.toLocaleString()}</span> pts · <b>${sessions}</b> session(s) · <b>${deaths.length}</b> 💀 <span class="dim">· v${version}</span>`;
   renderLegend(mode, seenT, R);
-  initReplay(mode, R, events); // (re)arm the replay over the points kept by the current filters, colored to match
+  initReplay(mode, R, events, deathPos); // (re)arm the replay over the points kept by the current filters, colored to match
 }
 
 // --- Hover: show the nearest recorded point's details -------------------------
@@ -653,9 +685,23 @@ const rpEl = {
 };
 map.createPane('replay'); map.getPane('replay').style.zIndex = 650; // above the static track's overlay pane
 const rpIsCut = (a, b) => b.r.t < a.r.t || (b.r.flags & F_SEGMENT_START) || Math.hypot(b.r.x - a.r.x, b.r.y - a.r.y) > TELEPORT_UNITS;
-const rpFmtDist = u => u >= 1000 ? `${(u / 1000).toFixed(1)} km` : `${Math.round(u)} m`; // game units ~ metres
-function rpFmtDur(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; }
+// Game units ~ metres. Under 1 km stays metric-only (sub-mile figures like "0.2 mi" add noise);
+// from 1 km up, show both systems since the audience is split on which one is meaningful.
+const rpFmtDist = u => u >= 1000 ? `${Math.round(u / 1000)} km (${Math.round(u / 1609.34)} mi)` : `${Math.round(u)} m`;
+// Minutes are spelled "min" so a short trip's duration can't be misread against the
+// distance's metres ("0 m · 0min" rather than "~0 m · 0m").
+// One rounded unit, chosen by magnitude: minutes under an hour, whole hours up to two days,
+// whole days beyond. Minutes are spelled "min" so a short trip's duration can't be misread
+// against the distance's metres ("0 m · 0min" rather than "0 m · 0m").
+function rpFmtDur(s) {
+  const unit = (n, name) => `${n} ${name}${n === 1 ? '' : 's'}`;
+  const days = s / 86400;
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  if (days < 2) return unit(Math.round(s / 3600), 'hour');
+  if (days < 60) return unit(Math.round(days), 'day');
+  if (days < 730) return unit(Math.round(days / 30.44), 'month');
+  return unit(Math.round(days / 365.25), 'year');
+}
 const rpEVENT_STYLE = {
   death: { icon: DEATH_ICON, pane: 'replay' },
 };
@@ -703,8 +749,8 @@ function rpDraw() {
   rp.marker.setStyle({ opacity: active ? 1 : 0, fillOpacity: active ? 1 : 0 }); // hide the playhead at rest for a clean, marker-free keepsake view
   rpEl.clock.innerHTML =
     `<b>${fmtTime(r.t)}</b><br>` +
-    `<span class="sub">${(T[r.transport] || ['?'])[0]} · honor ${r.honor} · $${r.cash} · ${CHARS[r.character] || '?'}</span><br>` +
-    `<span class="sub">~${rpFmtDist(rp.dist[i])} · ${rpFmtDur(rp.elapsed[i])} in-game · ${rp.trans[i]} transitions</span>`;
+    `<span class="sub">${CHARS[r.character] || '?'} · ${(T[r.transport] || ['?'])[0]} · honor ${r.honor} · $${r.cash} · ${rp.deathPos.filter(p => p <= i).length} 💀</span><br>` +
+    `<span class="sub">${rpFmtDist(rp.dist[i])} · ${rpFmtDur(rp.elapsed[i])} in-game</span>`;
   rpReveal(i, active);
   map.getContainer().classList.toggle('replaying', active); // fade static track once under way
   if (rp.playing && !map.getBounds().pad(-0.12).contains(ll)) map.panTo(ll, { animate: true, duration: .4 });
@@ -724,23 +770,23 @@ function rpPlay() {
   rp.raf = requestAnimationFrame(rpTick);
 }
 function rpPause() { rp.playing = false; rpEl.play.textContent = '▶'; cancelAnimationFrame(rp.raf); }
-function initReplay(mode, R, events) {
+function initReplay(mode, R, events, deathPos) {
   rpPause();
   const prevIdx = rp.idx, prevLen = rp.seq.length;
   rp.seq = hoverPts.slice(); rp.mode = mode; rp.R = R;
+  rp.deathPos = deathPos || []; // sorted replay positions of deaths, for the trip tally
   if (rp.trail) { map.removeLayer(rp.trail); rp.trail = null; }
   if (rp.marker) { map.removeLayer(rp.marker); rp.marker = null; }
   for (const e of rp.events) if (e.shown) map.removeLayer(e.marker); // clear any revealed markers from the prior render
   rp.events = []; rp.staticHidden = false;
   if (rp.seq.length < 2) { rp.idx = 0; rpEl.bar.classList.remove('show'); map.getContainer().classList.remove('replaying'); return; }
-  // Cumulative trip stats per point: distance ridden, "lived" in-game time (mission skips excluded),
-  // and transport changes. Precomputed once so playback just indexes them.
-  rp.dist = [0]; rp.elapsed = [0]; rp.trans = [0];
+  // Cumulative trip stats per point: distance ridden and "lived" in-game time (mission skips
+  // excluded). Precomputed once so playback just indexes them.
+  rp.dist = [0]; rp.elapsed = [0];
   for (let i = 1; i < rp.seq.length; i++) {
     const a = rp.seq[i - 1], b = rp.seq[i], cut = rpIsCut(a, b), dt = b.r.t - a.r.t;
     rp.dist[i]    = rp.dist[i - 1]    + (cut ? 0 : Math.hypot(b.r.x - a.r.x, b.r.y - a.r.y));
     rp.elapsed[i] = rp.elapsed[i - 1] + (!cut && dt > 0 && dt <= TRIP_TIME_CAP ? dt : 0);
-    rp.trans[i]   = rp.trans[i - 1]   + (!cut && b.r.transport !== a.r.transport ? 1 : 0);
   }
   rp.events = (events || []).map(e => ({ ...e, shown: false, marker: L.marker(e.ll, rpEVENT_STYLE[e.kind]).bindTooltip(e.label) }));
   // Keep your spot when only the color mode/filters changed the styling, not the point count.
@@ -776,8 +822,12 @@ panelToggle.addEventListener('click', () => {
   panelToggle.textContent = collapsed ? '▸' : '▾';
   panelToggle.title = collapsed ? 'Expand panel' : 'Collapse panel';
 });
-['colormode', 'f-cutscene', 'f-mission', 'f-orphan', 'f-teleport', 'f-death'].forEach(id =>
+['f-cutscene', 'f-mission', 'f-orphan', 'f-teleport', 'f-death'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => { if (lastData) render(lastData, false); }));
+document.querySelectorAll('#colormode button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#colormode button').forEach(x => x.classList.toggle('on', x === b));
+  if (lastData) render(lastData, false);
+}));
 const drop = document.getElementById('drop');
 window.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('show'); });
 window.addEventListener('dragleave', e => { if (e.clientX <= 0 || e.clientY <= 0) drop.classList.remove('show'); });
