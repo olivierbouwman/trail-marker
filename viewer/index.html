@@ -821,7 +821,9 @@ document.addEventListener('keydown', e => {
 // export looks like the on-screen keepsake view, only sharp at print size.
 const EXPORT = {
   poster: { w: 10800, h: 7200, type: 'image/png', q: undefined, file: 'trail-marker-poster.png' }, // 36×24″ @ 300 DPI
-  share:  { w: 2048, h: 1152, type: 'image/jpeg', q: .92, file: 'trail-marker.jpg' },
+  // Share matches the padded world's own ~1.22:1 aspect — no required ratio for social
+  // posts, and this way the map fills the frame with no dead paper beyond its margins.
+  share:  { w: 2048, h: 1676, type: 'image/jpeg', q: .92, file: 'trail-marker.jpg' },
 };
 const TILE_URL = (z, x, y) => `https://s.rsg.sc/sc/images/games/RDR2/map/game/${z}/${x}/${y}.jpg`;
 
