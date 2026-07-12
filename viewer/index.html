@@ -825,13 +825,13 @@ const EXPORT = {
 };
 const TILE_URL = (z, x, y) => `https://s.rsg.sc/sc/images/games/RDR2/map/game/${z}/${x}/${y}.jpg`;
 
-// Frame trail + cartouche (like fitAll), pad, then grow the short axis to the target aspect.
+// Frame the whole world map (cartouche included — it sits inside it), pad a hair, then
+// grow the short axis to the target aspect. A fixed full-map crop beats a trail-driven
+// one: nothing gets cut off, unexplored country reads as part of the story, and every
+// export of the same world composes identically.
 function exportBounds(ar) {
-  let s = Infinity, n = -Infinity, w = Infinity, e = -Infinity;
-  for (const p of hoverPts) { s = Math.min(s, p.lat); n = Math.max(n, p.lat); w = Math.min(w, p.lng); e = Math.max(e, p.lng); }
-  s = Math.min(s, CART_BOUNDS.getSouth()); n = Math.max(n, CART_BOUNDS.getNorth());
-  w = Math.min(w, CART_BOUNDS.getWest()); e = Math.max(e, CART_BOUNDS.getEast());
-  const padX = (e - w) * .04, padY = (n - s) * .04;
+  let w = mapBounds.getWest(), e = mapBounds.getEast(), s = mapBounds.getSouth(), n = mapBounds.getNorth();
+  const padX = (e - w) * .015, padY = (n - s) * .015;
   s -= padY; n += padY; w -= padX; e += padX;
   if ((e - w) / (n - s) < ar) { const g = ((n - s) * ar - (e - w)) / 2; w -= g; e += g; }
   else { const g = ((e - w) / ar - (n - s)) / 2; s -= g; n += g; }
@@ -955,6 +955,9 @@ async function drawCartouche(ctx, b, W) {
   const wpx = (CART_BOUNDS.getEast() - CART_BOUNDS.getWest()) * ppu;
   const hpx = (CART_BOUNDS.getNorth() - CART_BOUNDS.getSouth()) * ppu;
   const svg = cartoucheLayer.getElement().cloneNode(true);
+  // Strip Leaflet's on-screen positioning (class + inline translate3d style): inside a
+  // standalone rasterized SVG that transform shifts and clips the content.
+  svg.removeAttribute('style'); svg.removeAttribute('class');
   svg.setAttribute('xmlns', SVGNS);
   svg.setAttribute('width', Math.round(wpx)); svg.setAttribute('height', Math.round(hpx));
   for (const im of svg.querySelectorAll('image')) {
