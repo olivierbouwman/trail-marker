@@ -139,6 +139,11 @@
     <section>
       <div id="legend"></div>
     </section>
+    <section>
+      <div class="group-label">Export:</div>
+      <button class="file-btn" id="export-poster" title="10800×7200 PNG — prints as a 36×24 in poster at 300 DPI">Poster PNG (36×24″)</button>
+      <button class="file-btn" id="export-share" title="2048×1152 JPEG, sized for social sharing">Share JPEG</button>
+    </section>
     <section id="replay">
       <div class="rp-row">
         <button id="rp-play" title="Play / pause replay (space)">▶</button>
@@ -805,6 +810,198 @@ document.addEventListener('keydown', e => {
     e.preventDefault(); rp.playing ? rpPause() : rpPlay();
   }
 });
+
+// --- Poster / share-image export ------------------------------------------------
+// Renders the loaded data fresh onto an offscreen canvas — no screenshotting. Map
+// tiles are fetched directly (the tile server sends `access-control-allow-origin: *`,
+// so the canvas stays exportable), and the trail, death crosses and cartouche are
+// redrawn from data with the *current* color mode and filters. UI chrome is simply
+// never drawn; the file carries its own small credit line instead. Framing and
+// relative line weights mirror a 1280px-wide screen view of the same bounds, so the
+// export looks like the on-screen keepsake view, only sharp at print size.
+const EXPORT = {
+  poster: { w: 10800, h: 7200, type: 'image/png', q: undefined, file: 'trail-marker-poster.png' }, // 36×24″ @ 300 DPI
+  share:  { w: 2048, h: 1152, type: 'image/jpeg', q: .92, file: 'trail-marker.jpg' },
+};
+const TILE_URL = (z, x, y) => `https://s.rsg.sc/sc/images/games/RDR2/map/game/${z}/${x}/${y}.jpg`;
+
+// Frame trail + cartouche (like fitAll), pad, then grow the short axis to the target aspect.
+function exportBounds(ar) {
+  let s = Infinity, n = -Infinity, w = Infinity, e = -Infinity;
+  for (const p of hoverPts) { s = Math.min(s, p.lat); n = Math.max(n, p.lat); w = Math.min(w, p.lng); e = Math.max(e, p.lng); }
+  s = Math.min(s, CART_BOUNDS.getSouth()); n = Math.max(n, CART_BOUNDS.getNorth());
+  w = Math.min(w, CART_BOUNDS.getWest()); e = Math.max(e, CART_BOUNDS.getEast());
+  const padX = (e - w) * .04, padY = (n - s) * .04;
+  s -= padY; n += padY; w -= padX; e += padX;
+  if ((e - w) / (n - s) < ar) { const g = ((n - s) * ar - (e - w)) / 2; w -= g; e += g; }
+  else { const g = ((e - w) / ar - (n - s)) / 2; s -= g; n += g; }
+  return { s, n, w, e };
+}
+
+async function drawTiles(ctx, b, W, onProgress) {
+  const ppu = W / (b.e - b.w);
+  const z = Math.max(2, Math.min(7, Math.ceil(Math.log2(ppu)))); // native-or-better tile resolution
+  const ts = 256 / 2 ** z; // tile size in map units
+  const maxX = Math.ceil(176 / ts) - 1, maxY = Math.ceil(144 / ts) - 1; // tiles exist only inside mapBounds
+  const x0 = Math.max(0, Math.floor(b.w / ts)), x1 = Math.min(maxX, Math.floor(b.e / ts));
+  const y0 = Math.max(0, Math.floor(-b.n / ts)), y1 = Math.min(maxY, Math.floor(-b.s / ts));
+  const jobs = [];
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) jobs.push([x, y]);
+  let done = 0;
+  const load = ([x, y]) => new Promise(res => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous'; // required, or the canvas taints and toBlob throws
+    img.onload = () => res([x, y, img]);
+    img.onerror = () => res(null); // missing edge tiles are just blank paper
+    img.src = TILE_URL(z, x, y);
+  }).then(r => { onProgress(++done, jobs.length); return r; });
+  // A 300 DPI poster needs ~2000 tiles; a bounded worker pool keeps the CDN happy.
+  const results = [], it = jobs.values();
+  await Promise.all(Array.from({ length: 24 }, async () => { for (const j of it) results.push(await load(j)); }));
+  for (const r of results) {
+    if (!r) continue;
+    const [x, y, img] = r;
+    ctx.drawImage(img, (x * ts - b.w) * ppu, (y * ts + b.n) * ppu, ts * ppu, ts * ppu);
+  }
+}
+
+// Mirrors render()'s run-building (same cuts: segment_start / teleport / respawn /
+// color change, same filters) but strokes onto the canvas instead of making polylines.
+function drawTrail(ctx, b, W) {
+  const ppu = W / (b.e - b.w);
+  const X = lng => (lng - b.w) * ppu, Y = lat => (b.n - lat) * ppu;
+  const { recs } = lastData;
+  const mode = document.querySelector('#colormode .on').dataset.mode;
+  const R = dataRanges(recs);
+  const exCut = !document.getElementById('f-cutscene').checked;
+  const exMission = !document.getElementById('f-mission').checked;
+  const showJumps = document.getElementById('f-teleport').checked;
+  const exDeath = !document.getElementById('f-death').checked;
+  const orph = document.getElementById('f-orphan').checked ? null : computeOrphans(recs);
+  // What the trail would measure on a 1280px-wide screen framing these bounds, scaled
+  // up to export pixels — keeps the trail-to-map proportion of the on-screen view.
+  const screenPpu = 1280 / (b.e - b.w);
+  const zEq = Math.max(2, Math.min(7, Math.round(Math.log2(screenPpu))));
+  const lw = weightForZoom(zEq) / screenPpu * ppu;
+
+  let run = [], runC = null, prevLL = null, pgx = null, pgy = null, pgt = null;
+  const runs = [], jumps = [];
+  const flush = () => { if (run.length > 1) runs.push({ pts: run, color: runC }); };
+  for (let i = 0; i < recs.length; i++) {
+    const r = recs[i];
+    if ((exCut && (r.flags & 0x01)) || (exMission && (r.flags & F_MISSION)) || (orph && orph[i])) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
+    const ll = gameToLatLng(r.x, r.y);
+    const col = colorOf(r, mode, R);
+    const respawn = prevLL && pgt !== null && r.t < pgt && !(r.flags & F_SEGMENT_START);
+    const teleport = prevLL && pgx !== null && Math.hypot(r.x - pgx, r.y - pgy) > TELEPORT_UNITS;
+    if ((r.flags & F_SEGMENT_START) || teleport || respawn) {
+      flush();
+      if (teleport && !respawn && showJumps) jumps.push([prevLL, ll]);
+      run = [ll]; runC = col;
+    } else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; }
+    else run.push(ll);
+    prevLL = ll; pgx = r.x; pgy = r.y; pgt = r.t;
+  }
+  flush();
+
+  ctx.lineCap = ctx.lineJoin = 'round';
+  ctx.save(); // fast-travel dashes under the trail, as on screen
+  ctx.globalAlpha = .5; ctx.strokeStyle = '#8a7a54'; ctx.lineWidth = Math.max(1, lw / 3);
+  ctx.setLineDash([lw * 1.6, lw * 2.8]);
+  for (const [p, q] of jumps) { ctx.beginPath(); ctx.moveTo(X(p[1]), Y(p[0])); ctx.lineTo(X(q[1]), Y(q[0])); ctx.stroke(); }
+  ctx.restore();
+
+  ctx.save(); // the CSS pane drop-shadow becomes a canvas shadow per stroke
+  ctx.globalAlpha = .65;
+  ctx.shadowColor = 'rgba(35,28,16,.75)'; ctx.shadowBlur = lw * .9;
+  ctx.lineWidth = lw;
+  for (const rn of runs) {
+    ctx.strokeStyle = rn.color;
+    ctx.beginPath();
+    ctx.moveTo(X(rn.pts[0][1]), Y(rn.pts[0][0]));
+    for (let k = 1; k < rn.pts.length; k++) ctx.lineTo(X(rn.pts[k][1]), Y(rn.pts[k][0]));
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  if (!exDeath) {
+    const sz = 14 / screenPpu * ppu; // the on-screen 14px ink cross, in export pixels
+    ctx.save();
+    ctx.strokeStyle = '#7a0000'; ctx.lineWidth = sz / 7; ctx.lineCap = 'round';
+    ctx.shadowColor = 'rgba(35,28,16,.9)'; ctx.shadowBlur = sz / 8;
+    for (const d of computeDeaths(recs)) {
+      if ((exCut && (recs[d.idx].flags & 0x01)) || (exMission && (recs[d.idx].flags & F_MISSION)) || (orph && orph[d.idx])) continue;
+      const ll = gameToLatLng(recs[d.idx].x, recs[d.idx].y);
+      const cx = X(ll[1]), cy = Y(ll[0]), h = sz / 2;
+      ctx.beginPath();
+      ctx.moveTo(cx - h, cy - h); ctx.lineTo(cx + h, cy + h);
+      ctx.moveTo(cx - h, cy + h); ctx.lineTo(cx + h, cy - h);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+const toDataURL = url => fetch(url).then(r => r.blob()).then(b => new Promise(res => {
+  const f = new FileReader(); f.onload = () => res(f.result); f.readAsDataURL(b);
+}));
+
+// Reuse the live cartouche SVG (art + already-fitted text) by rasterizing a clone with
+// its image hrefs inlined — external refs don't load inside an <img>-rendered SVG.
+async function drawCartouche(ctx, b, W) {
+  if (!cartoucheLayer) return;
+  const ppu = W / (b.e - b.w);
+  const x = (CART_BOUNDS.getWest() - b.w) * ppu, y = (b.n - CART_BOUNDS.getNorth()) * ppu;
+  const wpx = (CART_BOUNDS.getEast() - CART_BOUNDS.getWest()) * ppu;
+  const hpx = (CART_BOUNDS.getNorth() - CART_BOUNDS.getSouth()) * ppu;
+  const svg = cartoucheLayer.getElement().cloneNode(true);
+  svg.setAttribute('xmlns', SVGNS);
+  svg.setAttribute('width', Math.round(wpx)); svg.setAttribute('height', Math.round(hpx));
+  for (const im of svg.querySelectorAll('image')) {
+    const data = await toDataURL(im.getAttribute('href'));
+    im.setAttribute('href', data);
+    im.setAttributeNS('http://www.w3.org/1999/xlink', 'href', data);
+  }
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    ctx.drawImage(img, x, y, wpx, hpx);
+  } finally { URL.revokeObjectURL(url); }
+}
+
+async function exportImage(kind, btn) {
+  if (!lastData || !hoverPts.length) return;
+  const P = EXPORT[kind], label = btn.textContent;
+  btn.disabled = true;
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = P.w; canvas.height = P.h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#d3b790'; ctx.fillRect(0, 0, P.w, P.h); // paper beyond the tiled region
+    const b = exportBounds(P.w / P.h);
+    await drawTiles(ctx, b, P.w, (d, t) => { btn.textContent = `Rendering… ${d}/${t}`; });
+    drawTrail(ctx, b, P.w);
+    await drawCartouche(ctx, b, P.w);
+    const pad = Math.round(P.h * .012); // the print carries its own credit, engraved-small
+    ctx.font = `${Math.round(P.h * .011)}px Georgia, serif`;
+    ctx.fillStyle = 'rgba(78,71,63,.9)'; ctx.textAlign = 'right';
+    ctx.fillText('Map © Rockstar Games · journal art via aicosu · Trail Marker', P.w - pad, P.h - pad);
+    const blob = await new Promise(res => canvas.toBlob(res, P.type, P.q));
+    if (!blob) throw new Error('this browser could not export an image this large');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = P.file;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  } catch (err) {
+    alert('Export failed: ' + err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+document.getElementById('export-poster').addEventListener('click', e => exportImage('poster', e.currentTarget));
+document.getElementById('export-share').addEventListener('click', e => exportImage('share', e.currentTarget));
 
 // --- File loading -------------------------------------------------------------
 function loadFile(file) {
