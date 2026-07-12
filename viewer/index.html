@@ -987,10 +987,6 @@ async function exportImage(kind, btn) {
     await drawTiles(ctx, b, P.w, (d, t) => { btn.textContent = `Rendering… ${d}/${t}`; });
     drawTrail(ctx, b, P.w);
     await drawCartouche(ctx, b, P.w);
-    const pad = Math.round(P.h * .012); // the print carries its own credit, engraved-small
-    ctx.font = `${Math.round(P.h * .011)}px Georgia, serif`;
-    ctx.fillStyle = 'rgba(78,71,63,.9)'; ctx.textAlign = 'right';
-    ctx.fillText('Map © Rockstar Games · journal art via aicosu · Trail Marker', P.w - pad, P.h - pad);
     const blob = await new Promise(res => canvas.toBlob(res, P.type, P.q));
     if (!blob) throw new Error('this browser could not export an image this large');
     const a = document.createElement('a');
