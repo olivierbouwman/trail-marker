@@ -133,6 +133,17 @@
         <button data-mode="cash">Money</button>
         <button data-mode="combat">Combat</button>
       </div>
+      <!-- Shown only when the loaded file contains both protagonists: a mid-playthrough
+           (Arthur-only) file never puts John's name on screen, so the UI can't spoil the
+           epilogue. render() toggles it per file and resets it to Both when hidden. -->
+      <div id="charfilter" style="display:none; margin-top:6px;">
+        <div class="group-label">Trail of:</div>
+        <div id="charmode" class="seg">
+          <button data-char="both" class="on">Both</button>
+          <button data-char="0">Arthur</button>
+          <button data-char="1">John</button>
+        </div>
+      </div>
       <div class="filters">
         <div class="group-label">Show:</div>
         <label><input type="checkbox" id="f-cutscene" checked> Cutscenes</label>
@@ -463,7 +474,7 @@ function cartoucheText(recs) {
 
   const body = [];
   const miles = dist / 1609.34;
-  if (miles >= 1) body.push(cap(numWords(roundMiles(miles))) + ' miles');
+  if (miles >= 1) { const m = roundMiles(miles); body.push(cap(numWords(m)) + (m === 1 ? ' mile' : ' miles')); }
   if (isFinite(minT)) {
     const y0 = civilFromDays(Math.floor(minT / 86400) + DAYS_1800)[0];
     const y1 = civilFromDays(Math.floor(maxT / 86400) + DAYS_1800)[0];
@@ -587,6 +598,18 @@ function render(data, doFit) {
   const exDeath = !document.getElementById('f-death').checked;
   const orph = document.getElementById('f-orphan').checked ? null : computeOrphans(recs);
 
+  // Character filter: offered only when the file holds both protagonists (see the HTML
+  // comment — spoiler control). When hidden it is forced back to Both, so a selection made
+  // on one file can't silently filter the next. In single-character view the stray
+  // character-2 records (transient model reads, mod swaps) are hidden too: the filter
+  // means "his trail only", not "everyone except the other man".
+  { let hasA = false, hasJ = false;
+    for (const r of recs) { if (r.character === 0) hasA = true; else if (r.character === 1) hasJ = true; if (hasA && hasJ) break; }
+    if (!(hasA && hasJ)) document.querySelectorAll('#charmode button').forEach(x => x.classList.toggle('on', x.dataset.char === 'both'));
+    document.getElementById('charfilter').style.display = hasA && hasJ ? '' : 'none'; }
+  const charSel = document.querySelector('#charmode .on').dataset.char;
+  const exChar = charSel === 'both' ? null : +charSel;
+
   const lines = [], deaths = [], teleports = [];
   hoverPts = [];
   let run = [], runC = null, prevLL = null, pgx = null, pgy = null, pgt = null;
@@ -599,7 +622,7 @@ function render(data, doFit) {
   const seenT = new Set();
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
-    if ((exCut && (r.flags & 0x01)) || (exMission && (r.flags & F_MISSION)) || (orph && orph[i])) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
+    if ((exCut && (r.flags & 0x01)) || (exMission && (r.flags & F_MISSION)) || (orph && orph[i]) || (exChar !== null && r.character !== exChar)) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
     const ll = gameToLatLng(r.x, r.y);
     const col = colorOf(r, mode, R);
     // A death respawn rewinds in-game time and warps you elsewhere — often a short hop the
@@ -627,7 +650,7 @@ function render(data, doFit) {
   // are hidden — the checkbox controls map clutter, not the trip stats.
   const deathPos = [];
   for (const d of computeDeaths(recs)) {
-    if ((exCut && (recs[d.idx].flags & 0x01)) || (exMission && (recs[d.idx].flags & F_MISSION)) || (orph && orph[d.idx])) continue; // hidden by a filter
+    if ((exCut && (recs[d.idx].flags & 0x01)) || (exMission && (recs[d.idx].flags & F_MISSION)) || (orph && orph[d.idx]) || (exChar !== null && recs[d.idx].character !== exChar)) continue; // hidden by a filter
     if (seqPos.has(d.idx)) deathPos.push(seqPos.get(d.idx));
     if (exDeath) continue;
     const ll = gameToLatLng(recs[d.idx].x, recs[d.idx].y);
@@ -642,7 +665,11 @@ function render(data, doFit) {
   // Death markers live in their own layer so the replay can hide them and reveal them on arrival.
   markerLayer = L.layerGroup([...deaths]).addTo(map);
 
-  buildCartouche(recs); // engraved map-credit block in the NW margin, composed from this file
+  // Engraved map-credit block in the NW margin. It retells whichever story is selected —
+  // name, miles, years and the honor line all recompute from the character-filtered
+  // records — but deliberately ignores the clutter toggles (cutscenes, mission travel):
+  // those change what's drawn, not whose trail it is.
+  buildCartouche(exChar === null ? recs : recs.filter(r => r.character === exChar));
   if (doFit && hoverPts.length) {
     const fb = L.latLngBounds(hoverPts.map(p => [p.lat, p.lng]));
     fb.extend(CART_BOUNDS); // frame the trail and the cartouche together, like a printed keepsake
@@ -886,6 +913,8 @@ function drawTrail(ctx, b, W) {
   const showJumps = document.getElementById('f-teleport').checked;
   const exDeath = !document.getElementById('f-death').checked;
   const orph = document.getElementById('f-orphan').checked ? null : computeOrphans(recs);
+  const charSel = document.querySelector('#charmode .on').dataset.char;
+  const exChar = charSel === 'both' ? null : +charSel;
   // What the trail would measure on a 1280px-wide screen framing these bounds, scaled
   // up to export pixels — keeps the trail-to-map proportion of the on-screen view.
   const screenPpu = 1280 / (b.e - b.w);
@@ -897,7 +926,7 @@ function drawTrail(ctx, b, W) {
   const flush = () => { if (run.length > 1) runs.push({ pts: run, color: runC }); };
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
-    if ((exCut && (r.flags & 0x01)) || (exMission && (r.flags & F_MISSION)) || (orph && orph[i])) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
+    if ((exCut && (r.flags & 0x01)) || (exMission && (r.flags & F_MISSION)) || (orph && orph[i]) || (exChar !== null && r.character !== exChar)) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
     const ll = gameToLatLng(r.x, r.y);
     const col = colorOf(r, mode, R);
     const respawn = prevLL && pgt !== null && r.t < pgt && !(r.flags & F_SEGMENT_START);
@@ -938,7 +967,7 @@ function drawTrail(ctx, b, W) {
     ctx.strokeStyle = '#7a0000'; ctx.lineWidth = sz / 7; ctx.lineCap = 'round';
     ctx.shadowColor = 'rgba(35,28,16,.9)'; ctx.shadowBlur = sz / 8;
     for (const d of computeDeaths(recs)) {
-      if ((exCut && (recs[d.idx].flags & 0x01)) || (exMission && (recs[d.idx].flags & F_MISSION)) || (orph && orph[d.idx])) continue;
+      if ((exCut && (recs[d.idx].flags & 0x01)) || (exMission && (recs[d.idx].flags & F_MISSION)) || (orph && orph[d.idx]) || (exChar !== null && recs[d.idx].character !== exChar)) continue;
       const ll = gameToLatLng(recs[d.idx].x, recs[d.idx].y);
       const cx = X(ll[1]), cy = Y(ll[0]), h = sz / 2;
       ctx.beginPath();
@@ -1030,6 +1059,10 @@ panelToggle.addEventListener('click', () => {
   document.getElementById(id).addEventListener('change', () => { if (lastData) render(lastData, false); }));
 document.querySelectorAll('#colormode button').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('#colormode button').forEach(x => x.classList.toggle('on', x === b));
+  if (lastData) render(lastData, false);
+}));
+document.querySelectorAll('#charmode button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#charmode button').forEach(x => x.classList.toggle('on', x === b));
   if (lastData) render(lastData, false);
 }));
 const drop = document.getElementById('drop');
