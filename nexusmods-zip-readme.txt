@@ -1,4 +1,4 @@
-TRAIL MARKER  v1.0.0
+TRAIL MARKER  v1.1.0
 A passive travel logger for Red Dead Redemption 2 (Story Mode)
 ================================================================
 
@@ -10,11 +10,23 @@ there.
 
 Later, drop your log onto the web viewer and watch your playthrough unfold:
 how you traveled, where you fought and died, your honor rising and falling,
-and your wallet over time.
+and your wallet over time. The viewer composes a keepsake title block from
+your file (your miles, your years, how your honor arc ended), drawn with
+sketches from Arthur's journal, and can export your map as a poster up to
+print size.
 
 Web viewer (no install, nothing uploaded -- your data is read entirely in
 your browser):
     https://olivierbouwman.github.io/trail-marker/
+
+
+WHAT'S NEW IN 1.1.0
+-------------------
+- Each record now carries a mission flag, set during scripted story and
+  stranger missions, so the viewer can filter mission travel out of your
+  map. Non-breaking: old logs keep working, and logs written by 1.0.0 keep
+  reading fine -- the flag is simply never set on old records.
+- No settings, no migration; drop the new TrailMarker.asi over the old one.
 
 
 REQUIREMENTS
@@ -49,8 +61,8 @@ WHAT IT RECORDS
   point while you're still, so travel is dense and idle time stays tiny.
 - Transport mode for every point: foot, horse, boat, train, balloon,
   swimming, or other vehicles.
-- Context -- in combat, wanted by the law, deaths, cutscenes, plus your
-  honor, character (Arthur / John), and cash.
+- Context -- in combat, wanted by the law, deaths, cutscenes, story and
+  stranger missions, plus your honor, character (Arthur / John), and cash.
 - Save-aware -- marks session boundaries so the viewer can separate save
   branches and pinpoint where you died.
 - Tiny -- a compact binary log (~65 MB even after 1000 hours), flushed
@@ -65,6 +77,8 @@ CREDITS
 - femga / rdr3_discoveries -- the vehicle list used to classify how you travel.
 - Rockstar Games -- the in-game map tiles the viewer draws on.
 - Jean Ropke -- the coordinate transform that maps game positions onto tiles.
+- Aicosu -- the Arthur Morgan journal replica the viewer's cartouche art is
+  drawn from (https://www.aicosu-cosplays.com/arthurmorgan).
 - Leaflet -- the open-source mapping library the web viewer is built on.
 - Built with Claude (Anthropic's AI) as a coding partner.
 - Everyone in the RDR2 modding community who shares knowledge and tools.

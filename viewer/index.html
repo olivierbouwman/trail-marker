@@ -71,7 +71,8 @@
   .leaflet-overlay-pane svg { filter: drop-shadow(0 0 1px rgba(35,28,16,1)) drop-shadow(0 0 3px rgba(66,52,28,.35)); }
   /* Replay draws in its own pane above the track; the same halo keeps it legible. While a replay
      is in progress we fade the static track so the growing colored trail reads as "where I've been". */
-  .leaflet-replay-pane svg { filter: drop-shadow(0 0 1px rgba(35,28,16,1)) drop-shadow(0 0 3px rgba(66,52,28,.35)); }
+  .leaflet-replay-pane svg, .leaflet-replay-pane canvas,
+  .leaflet-replay-head-pane svg { filter: drop-shadow(0 0 1px rgba(35,28,16,1)) drop-shadow(0 0 3px rgba(66,52,28,.35)); }
   .replaying .leaflet-overlay-pane { opacity: .3; transition: opacity .25s; }
   /* Death mark: a small ink cross ("X marks the spot") instead of a modern UI pin. A fixed-size
      div icon repositions via a cheap CSS transform on pan/zoom (no path geometry to recompute),
@@ -170,6 +171,9 @@
           <option value="40" selected>2×</option>
           <option value="80">4×</option>
           <option value="160">8×</option>
+          <option value="640">32×</option>
+          <option value="2560">128×</option>
+          <option value="10240">512×</option>
         </select>
       </div>
       <div id="rp-clock"></div>
@@ -713,15 +717,19 @@ function showHover() {
 // track (hidden cutscenes, hidden post-reload branches). A "scene cut" between two points — a
 // backward time jump, a session start, or a fast-travel-sized hop — just teleports the marker and
 // breaks the trail behind it, exactly like the static track.
-const rp = { seq: [], idx: 0, playing: false, marker: null, trail: null, raf: 0, last: 0,
-             mode: 'transport', R: null, drawn: -1, line: null, lineCol: null,
-             dist: [0], elapsed: [0], trans: [0], events: [], staticHidden: false };
+const rp = { seq: [], idx: 0, playing: false, marker: null, raf: 0, last: 0,
+             mode: 'transport', R: null, drawn: -1,
+             dist: [0], elapsed: [0], trans: [0], events: [], staticHidden: false,
+             catchup: 0, scrubRaf: 0 };
 const rpEl = {
   bar: document.getElementById('replay'), play: document.getElementById('rp-play'),
   scrub: document.getElementById('rp-scrub'), speed: document.getElementById('rp-speed'),
   clock: document.getElementById('rp-clock'),
 };
 map.createPane('replay'); map.getPane('replay').style.zIndex = 650; // above the static track's overlay pane
+// The playhead gets its own pane above the trail: in a shared layer every stroke the trail
+// grows would paint over the marker, burying it under its own history.
+map.createPane('replay-head'); map.getPane('replay-head').style.zIndex = 660;
 const rpIsCut = (a, b) => b.r.t < a.r.t || (b.r.flags & F_SEGMENT_START) || Math.hypot(b.r.x - a.r.x, b.r.y - a.r.y) > TELEPORT_UNITS;
 // Game units ~ metres. Under 1 km stays metric-only (sub-mile figures like "0.2 mi" add noise);
 // from 1 km up, show both systems since the audience is split on which one is meaningful.
@@ -743,22 +751,80 @@ function rpFmtDur(s) {
 const rpEVENT_STYLE = {
   death: { icon: DEATH_ICON, pane: 'replay' },
 };
-// Grow the trail point-by-point in the active color mode: extend the current run, or start a new
-// colored polyline on a color change (connected) or a scene cut (broken). Forward steps append;
-// a backward scrub rebuilds from the start (rare, so the O(n) redraw is fine).
-function rpResetTrail() { rp.trail.clearLayers(); rp.drawn = -1; rp.line = null; rp.lineCol = null; }
+// Grow the trail point-by-point in the active color mode, stroked straight onto one raw
+// canvas in the replay pane. Vector layers (SVG or Leaflet's canvas renderer) re-render the
+// whole accumulated trail on every mutation, which turns a scrub across a million-point file
+// into quadratic work; a plain bitmap makes appending O(new segments) — the drawn history
+// costs nothing until a pan/zoom re-anchors the canvas and replays it once.
+const rpTrail = {
+  el: null, ctx: null, origin: null, lastPt: null, lastCol: null,
+  ensure() {
+    if (this.el) return;
+    this.el = document.createElement('canvas');
+    this.el.className = 'leaflet-zoom-hide'; // hidden during zoom animation, redrawn at zoomend
+    this.el.style.pointerEvents = 'none';
+    map.getPane('replay').appendChild(this.el);
+    map.on('moveend zoomend viewreset resize', this.reset, this);
+    this.resize();
+  },
+  resize() { // size to the viewport and anchor to the current layer origin (also clears)
+    const size = map.getSize(), dpr = window.devicePixelRatio || 1;
+    this.el.width = size.x * dpr; this.el.height = size.y * dpr;
+    this.el.style.width = size.x + 'px'; this.el.style.height = size.y + 'px';
+    this.origin = map.containerPointToLayerPoint([0, 0]);
+    L.DomUtil.setPosition(this.el, this.origin);
+    this.ctx = this.el.getContext('2d');
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.ctx.lineWidth = 3.4; this.ctx.lineCap = this.ctx.lineJoin = 'round';
+    this.ctx.globalAlpha = .98;
+    this.lastPt = null; this.lastCol = null;
+  },
+  clear() {
+    if (!this.el) return;
+    this.ctx.save(); this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.clearRect(0, 0, this.el.width, this.el.height); this.ctx.restore();
+    this.lastPt = null; this.lastCol = null;
+  },
+  // Stroke points from..to: extend the current run, start a new path on a color change
+  // (connected) or a scene cut (broken) — same rules the static track renders with.
+  draw(from, to) {
+    const ctx = this.ctx;
+    let open = false;
+    for (let j = from; j <= to; j++) {
+      const p = rp.seq[j], col = colorOf(p.r, rp.mode, rp.R);
+      const lp = map.latLngToLayerPoint([p.lat, p.lng]);
+      const x = lp.x - this.origin.x, y = lp.y - this.origin.y;
+      const cut = j === 0 || rpIsCut(rp.seq[j - 1], p);
+      if (!open || cut || col !== this.lastCol) {
+        if (open) ctx.stroke();
+        ctx.beginPath(); ctx.strokeStyle = col; open = true;
+        if (!cut && this.lastPt) ctx.moveTo(this.lastPt[0], this.lastPt[1]); // connect across color change
+        else ctx.moveTo(x, y);
+        this.lastCol = col;
+      }
+      ctx.lineTo(x, y);
+      this.lastPt = [x, y];
+    }
+    if (open) ctx.stroke();
+  },
+  reset() { // view changed: re-anchor and replay everything drawn so far
+    if (!this.el) return;
+    this.resize();
+    if (rp.drawn >= 0) this.draw(0, rp.drawn);
+  },
+};
+// Work per call is capped at RP_CHUNK points so a slider drag across the whole file never
+// blocks a frame: the drawn trail lags the playhead for a beat and catches up over the next
+// few animation frames.
+const RP_CHUNK = 100000;
+function rpResetTrail() { rpTrail.ensure(); rpTrail.clear(); rp.drawn = -1; }
 function rpExtendTo(i) {
-  if (i < rp.drawn) rpResetTrail();
-  for (let j = rp.drawn + 1; j <= i; j++) {
-    const p = rp.seq[j], ll = [p.lat, p.lng], col = colorOf(p.r, rp.mode, rp.R);
-    const cut = j > 0 && rpIsCut(rp.seq[j - 1], rp.seq[j]);
-    if (!rp.line || cut || col !== rp.lineCol) {
-      const start = (!cut && j > 0) ? [[rp.seq[j - 1].lat, rp.seq[j - 1].lng], ll] : [ll]; // connect across color change
-      rp.line = L.polyline(start, { color: col, weight: 3.4, opacity: .98, pane: 'replay' }).addTo(rp.trail);
-      rp.lineCol = col;
-    } else rp.line.addLatLng(ll);
-  }
-  rp.drawn = i;
+  rpTrail.ensure();
+  if (i < rp.drawn) { rpTrail.clear(); rp.drawn = -1; }
+  const stop = Math.min(i, rp.drawn + RP_CHUNK);
+  if (stop > rp.drawn) { rpTrail.draw(rp.drawn + 1, stop); rp.drawn = stop; }
+  if (rp.drawn < i && !rp.catchup)
+    rp.catchup = requestAnimationFrame(() => { rp.catchup = 0; rpDraw(); }); // keep filling toward the playhead
 }
 // Reveal the death markers as the playhead reaches them (and re-hide on rewind).
 // While a replay is "active" we hide the static marker layer so upcoming deaths aren't spoiled;
@@ -810,10 +876,11 @@ function rpPlay() {
 function rpPause() { rp.playing = false; rpEl.play.textContent = '▶'; cancelAnimationFrame(rp.raf); }
 function initReplay(mode, R, events, deathPos) {
   rpPause();
+  cancelAnimationFrame(rp.catchup); rp.catchup = 0; // a stale catch-up frame would draw the old sequence
   const prevIdx = rp.idx, prevLen = rp.seq.length;
   rp.seq = hoverPts.slice(); rp.mode = mode; rp.R = R;
   rp.deathPos = deathPos || []; // sorted replay positions of deaths, for the trip tally
-  if (rp.trail) { map.removeLayer(rp.trail); rp.trail = null; }
+  rpTrail.clear(); rp.drawn = -1;
   if (rp.marker) { map.removeLayer(rp.marker); rp.marker = null; }
   for (const e of rp.events) if (e.shown) map.removeLayer(e.marker); // clear any revealed markers from the prior render
   rp.events = []; rp.staticHidden = false;
@@ -829,15 +896,20 @@ function initReplay(mode, R, events, deathPos) {
   rp.events = (events || []).map(e => ({ ...e, shown: false, marker: L.marker(e.ll, rpEVENT_STYLE[e.kind]).bindTooltip(e.label) }));
   // Keep your spot when only the color mode/filters changed the styling, not the point count.
   rp.idx = (prevLen === rp.seq.length) ? Math.min(prevIdx, rp.seq.length - 1) : 0;
-  rp.trail = L.layerGroup().addTo(map); rpResetTrail();
+  rpResetTrail();
   rp.marker = L.circleMarker([rp.seq[0].lat, rp.seq[0].lng],
-    { radius: 7, color: '#fff', weight: 2, fillColor: '#e8c25a', fillOpacity: 1, pane: 'replay' }).addTo(map);
+    { radius: 7, color: '#fff', weight: 2, fillColor: '#e8c25a', fillOpacity: 1, pane: 'replay-head' }).addTo(map);
   rpEl.scrub.max = rp.seq.length - 1;
   rpEl.bar.classList.add('show');
   rpDraw();
 }
 rpEl.play.addEventListener('click', () => rp.playing ? rpPause() : rpPlay());
-rpEl.scrub.addEventListener('input', () => { rpPause(); rp.idx = +rpEl.scrub.value; rpDraw(); });
+// A drag fires a stream of input events; coalesce them to one draw per animation frame so
+// scrubbing far into a big file stays smooth instead of redrawing per event.
+rpEl.scrub.addEventListener('input', () => {
+  rpPause(); rp.idx = +rpEl.scrub.value;
+  if (!rp.scrubRaf) rp.scrubRaf = requestAnimationFrame(() => { rp.scrubRaf = 0; rpDraw(); });
+});
 document.addEventListener('keydown', e => {
   if (e.code === 'Space' && rpEl.bar.classList.contains('show') && e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT') {
     e.preventDefault(); rp.playing ? rpPause() : rpPlay();
