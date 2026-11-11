@@ -55,6 +55,16 @@
   #panel .group-label { color: #b3a982; margin-bottom: 2px; }
   #panel .filters label { display: block; padding: 2px 0; cursor: pointer; user-select: none; color: #b3a982; }
   #panel input[type=checkbox] { accent-color: #caa233; vertical-align: -2px; margin: 0 5px 0 0; }
+  /* Playthrough multi-select: a native disclosure (keyboard + screen-reader support for free)
+     styled like the other controls, holding one checkbox per playthrough. */
+  #pt-menu summary {
+    width: fit-content; margin-top: 4px; padding: 3px 8px; cursor: pointer; font-size: 12px;
+    background: #2a2c20; color: #e8c25a; border: 1px solid #6b5d3e; border-radius: 4px;
+  }
+  #pt-menu summary:hover { background: #353826; }
+  #pt-menu summary:focus-visible { outline: 2px solid #e8c25a; outline-offset: 2px; }
+  #pt-options { margin-top: 4px; }
+  #pt-options label { display: block; padding: 2px 0; cursor: pointer; user-select: none; color: #b3a982; }
   #legend { display: none; color: #b3a982; }
   #legend span { display: inline-flex; align-items: center; margin: 2px 8px 2px 0; }
   #legend i { width: 11px; height: 11px; border-radius: 2px; margin-right: 4px; border: 1px solid #4a4128; box-sizing: border-box; }
@@ -145,11 +155,23 @@
           <button data-char="1">John</button>
         </div>
       </div>
+      <!-- Shown only when the file holds more than one playthrough (a new game was started
+           partway through the log). Defaults to the latest; the map title, colors and replay
+           stats all follow the selection. -->
+      <div id="ptfilter" style="display:none; margin-top:6px;">
+        <div class="group-label" id="pt-label">Playthroughs:</div>
+        <details id="pt-menu">
+          <summary id="pt-summary">Latest</summary>
+          <div id="pt-options" role="group" aria-labelledby="pt-label"></div>
+        </details>
+      </div>
       <div class="filters">
         <div class="group-label">Show:</div>
         <label><input type="checkbox" id="f-cutscene" checked> Cutscenes</label>
         <label><input type="checkbox" id="f-mission" checked> Mission travel</label>
+        <label><input type="checkbox" id="f-free" checked> Free roam</label>
         <label><input type="checkbox" id="f-orphan"> Post-reload branches</label>
+        <label><input type="checkbox" id="f-bench"> Benchmark runs</label>
         <label><input type="checkbox" id="f-teleport"> Fast-travel jumps</label>
         <label><input type="checkbox" id="f-death"> Death markers</label>
       </div>
@@ -342,7 +364,9 @@ function parseBin(buf) {
 function computeOrphans(recs) {
   const orph = new Array(recs.length).fill(false);
   for (let i = 1; i < recs.length; i++) {
-    if (recs[i].flags & F_SEGMENT_START) {
+    // A new game also rewinds the clock, but it starts a playthrough rather than abandoning
+    // one, so it must not orphan everything before it.
+    if ((recs[i].flags & F_SEGMENT_START) && !isNewGame(recs[i], i)) {
       const T = recs[i].t;
       for (let j = i - 1; j >= 0 && !orph[j]; j--) {
         if (recs[j].t > T) orph[j] = true; else break; // reached the branch point
@@ -350,6 +374,134 @@ function computeOrphans(recs) {
     }
   }
   return orph;
+}
+
+// Sessions recorded while the game's built-in "Run Benchmark" played. Its script, not the
+// player's save, places the camera: every run opens at the same Ambarino peak at in-game
+// 00:00, then hops through fixed fly-through scenes. So a session whose FIRST point sits on
+// that spot (within a few units, right altitude) just after midnight is a benchmark run, and
+// the whole session (up to the next segment_start) is marked. Checked against real logs:
+// 187 of 187 benchmark sessions caught, 0 of ~700 real sessions; the nearest real
+// session start was 15 units away at midday.
+const BENCH_START = { x: -1354, y: 2378, z: 318 };
+function computeBenchmark(recs) {
+  const bench = new Array(recs.length).fill(false);
+  let inBench = false;
+  for (let i = 0; i < recs.length; i++) {
+    const r = recs[i];
+    if (i === 0 || (r.flags & F_SEGMENT_START)) {
+      inBench = Math.hypot(r.x - BENCH_START.x, r.y - BENCH_START.y) < 5 &&
+                Math.abs(r.z - BENCH_START.z) < 15 && r.t % 86400 < 600;
+    }
+    bench[i] = inBench;
+  }
+  return bench;
+}
+
+// New game: RDR2 always opens the same way, in Colter at in-game 1899-01-05 08:00 with $0 and
+// neutral honor. A session whose first point matches is a fresh start, i.e. a playthrough
+// boundary. Reloading an early Colter save doesn't match: by the first save the clock is well
+// past the opening hour (the closest real reload seen was 46 in-game hours later, 42 units away).
+const NEWGAME = { x: -1348, y: 2436, t: (daysFromCivil(1899, 1, 5) - DAYS_1800) * 86400 + 8 * 3600 };
+const isNewGame = (r, i) => (i === 0 || (r.flags & F_SEGMENT_START)) &&
+  r.t >= NEWGAME.t && r.t < NEWGAME.t + 3600 && r.cash === 0 && r.honor === 0 &&
+  Math.hypot(r.x - NEWGAME.x, r.y - NEWGAME.y) < 200;
+
+// Splits the log into playthroughs at each new game. Records before the first new game (a log
+// that began mid-story) form their own playthrough, marked as not recorded from the start.
+function computePlaythroughs(recs) {
+  const id = new Uint16Array(recs.length), list = [];
+  for (let i = 0; i < recs.length; i++) {
+    const r = recs[i], fresh = isNewGame(r, i);
+    if (!list.length || fresh) list.push({ fresh, maxT: 0 });
+    const p = list[list.length - 1];
+    if (r.t > p.maxT) p.maxT = r.t;
+    id[i] = list.length - 1;
+  }
+  return { id, list };
+}
+
+// The records of the selected playthroughs, in order. Everything downstream (trail, deaths,
+// map title, color scale, replay stats) works on this view, so it all covers only the
+// selection. Computed and defaulted to the latest playthrough the first time a file renders.
+function viewOf(data) {
+  if (!data.pt) {
+    data.pt = computePlaythroughs(data.recs);
+    data.ptSel = new Set([data.pt.list.length - 1]);
+    buildPlaythroughUI(data);
+  }
+  const { id, list } = data.pt;
+  if (data.ptSel.size === list.length) return data.recs;
+  return data.recs.filter((_, i) => data.ptSel.has(id[i]));
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function buildPlaythroughUI(data) {
+  const { list } = data.pt, box = document.getElementById('pt-options');
+  document.getElementById('ptfilter').style.display = list.length > 1 ? '' : 'none';
+  document.getElementById('pt-menu').open = false;
+  box.textContent = '';
+  list.forEach((p, k) => {
+    const [y, m, d] = civilFromDays(Math.floor(p.maxT / 86400) + DAYS_1800);
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = data.ptSel.has(k);
+    cb.addEventListener('change', () => {
+      if (cb.checked) data.ptSel.add(k);
+      else if (data.ptSel.size > 1) data.ptSel.delete(k);
+      else { cb.checked = true; return; } // keep at least one playthrough on screen
+      updatePlaythroughSummary(data);
+      render(data, false);
+    });
+    const label = document.createElement('label');
+    label.append(cb, `Playthrough ${k + 1}${p.fresh ? '' : ' (began before recording)'}, to ${MONTHS[m - 1]} ${d}, ${y}`);
+    box.append(label);
+  });
+  updatePlaythroughSummary(data);
+}
+function updatePlaythroughSummary(data) {
+  const n = data.pt.list.length, sel = [...data.ptSel].sort((a, b) => a - b);
+  document.getElementById('pt-summary').textContent =
+    sel.length === n ? `All ${n} playthroughs` :
+    sel.length === 1 ? `Playthrough ${sel[0] + 1}${sel[0] === n - 1 ? ' (latest)' : ''}` :
+    `Playthroughs ${sel.map(k => k + 1).join(', ')}`;
+}
+
+// The "Show" checkboxes. Every point falls in exactly one category, so each box means "show
+// this kind of point" and checked boxes add up (checking just one shows just that kind).
+// Priority: benchmark run (not your play at all) > post-reload branch (play undone by loading
+// a save) > cutscene (the game had control) > mission travel / free roam (by the mission flag).
+// `show` = trail points to draw. `overlay` = points that fast-travel jumps and death markers
+// may use: the visible trail, or, when no trail box is checked, all real play (everything but
+// benchmark runs and post-reload branches), so "Death markers" alone shows your deaths.
+const SHOW_IDS = ['f-bench', 'f-orphan', 'f-cutscene', 'f-mission', 'f-free']; // indexed by category
+function visibility(recs, exChar) {
+  const on = SHOW_IDS.map(id => document.getElementById(id).checked);
+  const anyTrail = on.some(Boolean);
+  const bench = computeBenchmark(recs), orph = computeOrphans(recs);
+  const show = new Uint8Array(recs.length), overlay = new Uint8Array(recs.length);
+  for (let i = 0; i < recs.length; i++) {
+    const r = recs[i];
+    if (exChar !== null && r.character !== exChar) continue;
+    const cat = bench[i] ? 0 : orph[i] ? 1 : (r.flags & F_NONGAMEPLAY) ? 2 : (r.flags & F_MISSION) ? 3 : 4;
+    show[i] = on[cat];
+    overlay[i] = anyTrail ? on[cat] : cat >= 2;
+  }
+  return { show, overlay };
+}
+
+// Fast-travel jumps: a long hop between two consecutive overlay points (a hidden point in
+// between breaks the chain). Respawns aren't jumps: they rewind time without a segment_start.
+function computeJumps(recs, mask) {
+  const out = [];
+  let p = -1;
+  for (let i = 0; i < recs.length; i++) {
+    if (!mask[i]) { p = -1; continue; }
+    const r = recs[i], q = recs[p];
+    if (p >= 0 && Math.hypot(r.x - q.x, r.y - q.y) > TELEPORT_UNITS && !(r.t < q.t && !(r.flags & F_SEGMENT_START)))
+      out.push([gameToLatLng(q.x, q.y), gameToLatLng(r.x, r.y)]);
+    p = i;
+  }
+  return out;
 }
 
 // Death locations, unified into one marker per death from two signals:
@@ -593,14 +745,11 @@ function render(data, doFit) {
   lastData = data;
   if (pathLayer) { map.removeLayer(pathLayer); pathLayer = null; }
   if (markerLayer) { map.removeLayer(markerLayer); markerLayer = null; }
-  const { recs } = data;
+  const recs = viewOf(data); // only the selected playthroughs, from here on
   const mode = document.querySelector('#colormode .on').dataset.mode;
   const R = dataRanges(recs);
-  const exCut = !document.getElementById('f-cutscene').checked;
-  const exMission = !document.getElementById('f-mission').checked;
   const showJumps = document.getElementById('f-teleport').checked;
   const exDeath = !document.getElementById('f-death').checked;
-  const orph = document.getElementById('f-orphan').checked ? null : computeOrphans(recs);
 
   // Character filter: offered only when the file holds both protagonists (see the HTML
   // comment — spoiler control). When hidden it is forced back to Both, so a selection made
@@ -613,6 +762,7 @@ function render(data, doFit) {
     document.getElementById('charfilter').style.display = hasA && hasJ ? '' : 'none'; }
   const charSel = document.querySelector('#charmode .on').dataset.char;
   const exChar = charSel === 'both' ? null : +charSel;
+  const { show, overlay } = visibility(recs, exChar);
 
   const lines = [], deaths = [], teleports = [];
   hoverPts = [];
@@ -626,7 +776,7 @@ function render(data, doFit) {
   const seenT = new Set();
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
-    if ((exCut && (r.flags & 0x01)) || (exMission && (r.flags & F_MISSION)) || (orph && orph[i]) || (exChar !== null && r.character !== exChar)) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
+    if (!show[i]) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
     const ll = gameToLatLng(r.x, r.y);
     const col = colorOf(r, mode, R);
     // A death respawn rewinds in-game time and warps you elsewhere — often a short hop the
@@ -636,7 +786,6 @@ function render(data, doFit) {
     const teleport = prevLL && pgx !== null && Math.hypot(r.x - pgx, r.y - pgy) > TELEPORT_UNITS;
     if ((r.flags & F_SEGMENT_START) || teleport || respawn) {               // session boundary, fast-travel jump, or respawn
       flush();
-      if (teleport && !respawn && showJumps) teleports.push(L.polyline([prevLL, ll], { color: '#8a7a54', weight: 1, opacity: .5, dashArray: '4 7' }));
       run = [ll]; runC = col;
     } else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; } // color change: connect
     else run.push(ll);
@@ -644,6 +793,8 @@ function render(data, doFit) {
     prevLL = ll; pgx = r.x; pgy = r.y; pgt = r.t; seenT.add(r.transport);
   }
   flush();
+  if (showJumps) for (const jl of computeJumps(recs, overlay))
+    teleports.push(L.polyline(jl, { color: '#8a7a54', weight: 1, opacity: .5, dashArray: '4 7' }));
 
   // Where each kept point landed in the replay sequence, keyed by original record index.
   const seqPos = new Map(); hoverPts.forEach((p, si) => seqPos.set(p.i, si));
@@ -654,7 +805,7 @@ function render(data, doFit) {
   // are hidden — the checkbox controls map clutter, not the trip stats.
   const deathPos = [];
   for (const d of computeDeaths(recs)) {
-    if ((exCut && (recs[d.idx].flags & 0x01)) || (exMission && (recs[d.idx].flags & F_MISSION)) || (orph && orph[d.idx]) || (exChar !== null && recs[d.idx].character !== exChar)) continue; // hidden by a filter
+    if (!overlay[d.idx]) continue; // hidden by a filter
     if (seqPos.has(d.idx)) deathPos.push(seqPos.get(d.idx));
     if (exDeath) continue;
     const ll = gameToLatLng(recs[d.idx].x, recs[d.idx].y);
@@ -670,10 +821,12 @@ function render(data, doFit) {
   markerLayer = L.layerGroup([...deaths]).addTo(map);
 
   // Engraved map-credit block in the NW margin. It retells whichever story is selected —
-  // name, miles, years and the honor line all recompute from the character-filtered
-  // records — but deliberately ignores the clutter toggles (cutscenes, mission travel):
-  // those change what's drawn, not whose trail it is.
-  buildCartouche(exChar === null ? recs : recs.filter(r => r.character === exChar));
+  // name, miles, years and the honor line all recompute from the selected playthroughs and
+  // character — but deliberately ignores the clutter toggles (cutscenes, mission travel):
+  // those change what's drawn, not whose trail it is. Benchmark runs are the exception: they
+  // are Rockstar's scripted fly-through, not the player's journey, so they never count.
+  { const bench = computeBenchmark(recs);
+    buildCartouche(recs.filter((r, i) => !bench[i] && (exChar === null || r.character === exChar))); }
   if (doFit && hoverPts.length) {
     const fb = L.latLngBounds(hoverPts.map(p => [p.lat, p.lng]));
     fb.extend(CART_BOUNDS); // frame the trail and the cartouche together, like a printed keepsake
@@ -977,16 +1130,14 @@ async function drawTiles(ctx, b, W, onProgress) {
 function drawTrail(ctx, b, W) {
   const ppu = W / (b.e - b.w);
   const X = lng => (lng - b.w) * ppu, Y = lat => (b.n - lat) * ppu;
-  const { recs } = lastData;
+  const recs = viewOf(lastData); // same playthrough selection as the screen
   const mode = document.querySelector('#colormode .on').dataset.mode;
   const R = dataRanges(recs);
-  const exCut = !document.getElementById('f-cutscene').checked;
-  const exMission = !document.getElementById('f-mission').checked;
   const showJumps = document.getElementById('f-teleport').checked;
   const exDeath = !document.getElementById('f-death').checked;
-  const orph = document.getElementById('f-orphan').checked ? null : computeOrphans(recs);
   const charSel = document.querySelector('#charmode .on').dataset.char;
   const exChar = charSel === 'both' ? null : +charSel;
+  const { show, overlay } = visibility(recs, exChar);
   // What the trail would measure on a 1280px-wide screen framing these bounds, scaled
   // up to export pixels — keeps the trail-to-map proportion of the on-screen view.
   const screenPpu = 1280 / (b.e - b.w);
@@ -998,20 +1149,20 @@ function drawTrail(ctx, b, W) {
   const flush = () => { if (run.length > 1) runs.push({ pts: run, color: runC }); };
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
-    if ((exCut && (r.flags & 0x01)) || (exMission && (r.flags & F_MISSION)) || (orph && orph[i]) || (exChar !== null && r.character !== exChar)) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
+    if (!show[i]) { flush(); run = []; runC = null; prevLL = null; pgx = null; pgt = null; continue; }
     const ll = gameToLatLng(r.x, r.y);
     const col = colorOf(r, mode, R);
     const respawn = prevLL && pgt !== null && r.t < pgt && !(r.flags & F_SEGMENT_START);
     const teleport = prevLL && pgx !== null && Math.hypot(r.x - pgx, r.y - pgy) > TELEPORT_UNITS;
     if ((r.flags & F_SEGMENT_START) || teleport || respawn) {
       flush();
-      if (teleport && !respawn && showJumps) jumps.push([prevLL, ll]);
       run = [ll]; runC = col;
     } else if (col !== runC) { flush(); run = prevLL ? [prevLL, ll] : [ll]; runC = col; }
     else run.push(ll);
     prevLL = ll; pgx = r.x; pgy = r.y; pgt = r.t;
   }
   flush();
+  if (showJumps) jumps.push(...computeJumps(recs, overlay));
 
   ctx.lineCap = ctx.lineJoin = 'round';
   ctx.save(); // fast-travel dashes under the trail, as on screen
@@ -1039,7 +1190,7 @@ function drawTrail(ctx, b, W) {
     ctx.strokeStyle = '#7a0000'; ctx.lineWidth = sz / 7; ctx.lineCap = 'round';
     ctx.shadowColor = 'rgba(35,28,16,.9)'; ctx.shadowBlur = sz / 8;
     for (const d of computeDeaths(recs)) {
-      if ((exCut && (recs[d.idx].flags & 0x01)) || (exMission && (recs[d.idx].flags & F_MISSION)) || (orph && orph[d.idx]) || (exChar !== null && recs[d.idx].character !== exChar)) continue;
+      if (!overlay[d.idx]) continue;
       const ll = gameToLatLng(recs[d.idx].x, recs[d.idx].y);
       const cx = X(ll[1]), cy = Y(ll[0]), h = sz / 2;
       ctx.beginPath();
@@ -1127,7 +1278,7 @@ panelToggle.addEventListener('click', () => {
   panelToggle.textContent = collapsed ? '▸' : '▾';
   panelToggle.title = collapsed ? 'Expand panel' : 'Collapse panel';
 });
-['f-cutscene', 'f-mission', 'f-orphan', 'f-teleport', 'f-death'].forEach(id =>
+['f-cutscene', 'f-mission', 'f-free', 'f-orphan', 'f-bench', 'f-teleport', 'f-death'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => { if (lastData) render(lastData, false); }));
 document.querySelectorAll('#colormode button').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('#colormode button').forEach(x => x.classList.toggle('on', x === b));
