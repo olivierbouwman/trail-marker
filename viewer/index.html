@@ -137,6 +137,11 @@
       </div>
     </section>
     <section>
+      <div class="group-label" id="mapstyle-label">Map:</div>
+      <div id="mapstyle" class="seg" role="group" aria-labelledby="mapstyle-label" style="margin-bottom:8px;">
+        <button data-style="classic" class="on" aria-pressed="true">Classic</button>
+        <button data-style="detailed" aria-pressed="false">Detailed</button>
+      </div>
       <div class="group-label">Color by:</div>
       <div id="colormode" class="seg">
         <button data-mode="honor" class="on">Honor</button>
@@ -172,6 +177,8 @@
         <label><input type="checkbox" id="f-free" checked> Free roam</label>
         <label><input type="checkbox" id="f-orphan"> Post-reload branches</label>
         <label><input type="checkbox" id="f-bench"> Benchmark runs</label>
+        <!-- Shown only when the file has points on Guarma (it's a Chapter 5 spoiler otherwise). -->
+        <label id="f-guarma-row" style="display:none"><input type="checkbox" id="f-guarma" checked> Guarma</label>
         <label><input type="checkbox" id="f-teleport"> Fast-travel jumps</label>
         <label><input type="checkbox" id="f-death"> Death markers</label>
       </div>
@@ -212,7 +219,7 @@
 // map uses): a single isotropic scale + offset. lat from game Y (north), lng from game X
 // (east). This matches the reference collectors map, so it needs no hand-calibration.
 const CAL = { s: 0.01552, offLat: -63.6, offLng: 111.29 };
-const gameToLatLng = (x, y) => [ CAL.s * y + CAL.offLat, CAL.s * x + CAL.offLng ];
+const gameToLatLng = (x, y) => isGuarma(x, y) ? guarmaToLatLng(x, y) : [ CAL.s * y + CAL.offLat, CAL.s * x + CAL.offLng ];
 // Shared icon instance — same object reused for every death marker, static or replay.
 const DEATH_ICON = L.divIcon({ className: 'death-mark', html: '<i></i>', iconSize: [12, 12], iconAnchor: [6, 6] });
 
@@ -316,11 +323,69 @@ const map = L.map('map', {
 });
 map.attributionControl.setPrefix(''); // drop Leaflet's own credit/flag; keep the Rockstar map credit below
 L.control.zoom({ position: 'bottomright' }).addTo(map);
-L.tileLayer('https://s.rsg.sc/sc/images/games/RDR2/map/game/{z}/{x}/{y}.jpg', {
-  minZoom: 2, maxZoom: 7, bounds: mapBounds, noWrap: true,
-  attribution: 'Map © <a href="https://www.rockstargames.com/">Rockstar Games</a>'
-}).addTo(map);
+// Two map styles on the same tile grid. Classic = Rockstar's own map tiles. Detailed = the same
+// map with every road, trail and railway drawn bold (rdr2map.com's art, distributed by Jean
+// Ropke's RDR2 Collectors Map). Detailed is hosted alongside this page, which also keeps the
+// poster export working: the canvas needs tiles served with CORS or from the same origin.
+const MAP_STYLES = {
+  classic: { url: 'https://s.rsg.sc/sc/images/games/RDR2/map/game/{z}/{x}/{y}.jpg',
+    attribution: 'Map © <a href="https://www.rockstargames.com/">Rockstar Games</a>' },
+  detailed: { url: 'tiles/detailed/{z}/{x}_{y}.webp',
+    attribution: 'Map © <a href="https://www.rockstargames.com/">Rockstar Games</a> · detailed roads: <a href="https://rdr2map.com/">RDR2Map</a> via <a href="https://github.com/jeanropke/RDR2CollectorsMap">RDR2 Collectors Map</a>' },
+};
+let mapStyle = 'classic';
+try { if (localStorage.getItem('tm-map-style') === 'detailed') mapStyle = 'detailed'; } catch (e) {} // remembered per browser
+let baseLayer = null;
+function setMapStyle(style) {
+  mapStyle = style;
+  if (baseLayer) map.removeLayer(baseLayer);
+  baseLayer = L.tileLayer(MAP_STYLES[style].url, {
+    minZoom: 2, maxZoom: 7, bounds: mapBounds, noWrap: true, attribution: MAP_STYLES[style].attribution,
+  }).addTo(map);
+  document.querySelectorAll('#mapstyle button').forEach(b => {
+    const on = b.dataset.style === style;
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+  });
+  try { localStorage.setItem('tm-map-style', style); } catch (e) {}
+}
+setMapStyle(mapStyle);
+document.querySelectorAll('#mapstyle button').forEach(b => b.addEventListener('click', () => setMapStyle(b.dataset.style)));
 map.setView([-72, 88], 3);
+
+// --- Guarma inset ---------------------------------------------------------------
+// Guarma lies far south of the main map, outside every tile set. It's drawn as a framed inset in
+// the empty sea at the bottom right (inside the export frame, so it prints), at the same scale as
+// the main map. Points recorded on Guarma are moved into the inset by gameToLatLng.
+// Art: the in-game Guarma map from djrlincs_sharedmap (MIT): the walkable part of the island
+// during Chapter 5 (El Nido south to the plantation). The rest of the island is off-limits.
+// Calibration: north-up at 0.727 image px per game unit, Cinco Torres fort at game (995, -6748)
+// = image px (698, 628). The port, Manicato, Aguasdulces, La Capilla and El Hueco then land on
+// their places in the art to within a few pixels.
+const GUARMA = {
+  img: { url: 'assets/guarma.webp', w: 1296, h: 1424, s: 0.727, ax: 995, ay: -6748, px: 698, py: 628 },
+  k: CAL.s, top: -110.5, left: 145,   // same scale as the main map; where the art's NW corner sits
+};
+const GUARMA_NW = { x: GUARMA.img.ax - GUARMA.img.px / GUARMA.img.s, y: GUARMA.img.ay + GUARMA.img.py / GUARMA.img.s };
+// Main-map land never reaches this far south east of New Austin, so this box is unambiguous.
+const isGuarma = (x, y) => x > 300 && y < -4300;
+const guarmaToLatLng = (x, y) => [GUARMA.top + GUARMA.k * (y - GUARMA_NW.y), GUARMA.left + GUARMA.k * (x - GUARMA_NW.x)];
+const GUARMA_SE = { x: GUARMA_NW.x + GUARMA.img.w / GUARMA.img.s, y: GUARMA_NW.y - GUARMA.img.h / GUARMA.img.s };
+const GUARMA_IMG = L.latLngBounds(guarmaToLatLng(GUARMA_NW.x, GUARMA_SE.y), guarmaToLatLng(GUARMA_SE.x, GUARMA_NW.y));
+// Like a printed atlas inset, the trail is cropped to the art: Guarma points outside it (the
+// off-limits part of the island) aren't drawn. They still count toward the map title's distance.
+const inGuarmaArt = (x, y) => x >= GUARMA_NW.x && x <= GUARMA_SE.x && y <= GUARMA_NW.y && y >= GUARMA_SE.y;
+// Double rule: a hairline on the art's edge and a heavier rule just outside it.
+const GUARMA_RULE_GAP = 0.35; // map units between the two rules
+const GUARMA_OUTER = L.latLngBounds(
+  [GUARMA_IMG.getSouth() - GUARMA_RULE_GAP, GUARMA_IMG.getWest() - GUARMA_RULE_GAP],
+  [GUARMA_IMG.getNorth() + GUARMA_RULE_GAP, GUARMA_IMG.getEast() + GUARMA_RULE_GAP]);
+map.createPane('inset');
+map.getPane('inset').style.zIndex = 350; // above the tiles, below the trail
+const guarmaLayer = L.layerGroup([
+  L.imageOverlay(GUARMA.img.url, GUARMA_IMG, { pane: 'inset', interactive: false }),
+  L.rectangle(GUARMA_IMG, { pane: 'inset', color: '#6b5d3e', weight: 0.75, fill: false, interactive: false }),
+  L.rectangle(GUARMA_OUTER, { pane: 'inset', color: '#4e473f', weight: 1.75, fill: false, interactive: false }),
+]);
 // The cartouche is part of the map "paper", not window chrome: its own pane above the trail
 // (zIndex 640, below the replay pane at 650) so it pans and scales with the map like an
 // engraved map cartouche would. Its own pane keeps the overlay-pane drop-shadow filter off it.
@@ -477,11 +542,13 @@ const SHOW_IDS = ['f-bench', 'f-orphan', 'f-cutscene', 'f-mission', 'f-free']; /
 function visibility(recs, exChar) {
   const on = SHOW_IDS.map(id => document.getElementById(id).checked);
   const anyTrail = on.some(Boolean);
+  const exGuarma = !document.getElementById('f-guarma').checked; // hides Guarma's trail along with its inset
   const bench = computeBenchmark(recs), orph = computeOrphans(recs);
   const show = new Uint8Array(recs.length), overlay = new Uint8Array(recs.length);
   for (let i = 0; i < recs.length; i++) {
     const r = recs[i];
     if (exChar !== null && r.character !== exChar) continue;
+    if (isGuarma(r.x, r.y) && (exGuarma || !inGuarmaArt(r.x, r.y))) continue;
     const cat = bench[i] ? 0 : orph[i] ? 1 : (r.flags & F_NONGAMEPLAY) ? 2 : (r.flags & F_MISSION) ? 3 : 4;
     show[i] = on[cat];
     overlay[i] = anyTrail ? on[cat] : cat >= 2;
@@ -497,7 +564,9 @@ function computeJumps(recs, mask) {
   for (let i = 0; i < recs.length; i++) {
     if (!mask[i]) { p = -1; continue; }
     const r = recs[i], q = recs[p];
-    if (p >= 0 && Math.hypot(r.x - q.x, r.y - q.y) > TELEPORT_UNITS && !(r.t < q.t && !(r.flags & F_SEGMENT_START)))
+    // (No jump line between the main map and the Guarma inset: the inset's position isn't real geography.)
+    if (p >= 0 && Math.hypot(r.x - q.x, r.y - q.y) > TELEPORT_UNITS && !(r.t < q.t && !(r.flags & F_SEGMENT_START))
+        && isGuarma(r.x, r.y) === isGuarma(q.x, q.y))
       out.push([gameToLatLng(q.x, q.y), gameToLatLng(r.x, r.y)]);
     p = i;
   }
@@ -763,6 +832,12 @@ function render(data, doFit) {
   const charSel = document.querySelector('#charmode .on').dataset.char;
   const exChar = charSel === 'both' ? null : +charSel;
   const { show, overlay } = visibility(recs, exChar);
+
+  // Guarma: its checkbox and inset appear only when the selection has been there.
+  const hasGuarma = recs.some(r => isGuarma(r.x, r.y));
+  document.getElementById('f-guarma-row').style.display = hasGuarma ? '' : 'none';
+  const guarmaOn = hasGuarma && document.getElementById('f-guarma').checked;
+  if (guarmaOn) guarmaLayer.addTo(map); else guarmaLayer.remove();
 
   const lines = [], deaths = [], teleports = [];
   hoverPts = [];
@@ -1083,7 +1158,25 @@ const EXPORT = {
   // posts, and this way the map fills the frame with no dead paper beyond its margins.
   share:  { w: 2048, h: 1676, type: 'image/jpeg', q: .92, file: 'trail-marker.jpg' },
 };
-const TILE_URL = (z, x, y) => `https://s.rsg.sc/sc/images/games/RDR2/map/game/${z}/${x}/${y}.jpg`;
+const TILE_URL = (z, x, y) => MAP_STYLES[mapStyle].url.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+
+// The Guarma inset on the export canvas, mirroring the on-screen one (frame + island art),
+// drawn under the trail. Only when it's on screen too.
+async function drawGuarma(ctx, b, W) {
+  if (!map.hasLayer(guarmaLayer)) return;
+  const ppu = W / (b.e - b.w);
+  const rect = bb => [(bb.getWest() - b.w) * ppu, (b.n - bb.getNorth()) * ppu,
+                      (bb.getEast() - bb.getWest()) * ppu, (bb.getNorth() - bb.getSouth()) * ppu];
+  const img = new Image();
+  img.src = GUARMA.img.url;
+  await img.decode();
+  ctx.drawImage(img, ...rect(GUARMA_IMG));
+  ctx.save(); // the same double rule as on screen, scaled like the trail (screen px -> export px)
+  const px = (W / 1280) * .9;
+  ctx.strokeStyle = '#6b5d3e'; ctx.lineWidth = Math.max(1, 0.75 * px); ctx.strokeRect(...rect(GUARMA_IMG));
+  ctx.strokeStyle = '#4e473f'; ctx.lineWidth = Math.max(1, 1.75 * px); ctx.strokeRect(...rect(GUARMA_OUTER));
+  ctx.restore();
+}
 
 // Frame the whole world map (cartouche included — it sits inside it), pad a hair, then
 // grow the short axis to the target aspect. A fixed full-map crop beats a trail-driven
@@ -1245,6 +1338,7 @@ async function exportImage(kind, btn) {
     ctx.fillStyle = '#d3b790'; ctx.fillRect(0, 0, P.w, P.h); // paper beyond the tiled region
     const b = exportBounds(P.w / P.h);
     await drawTiles(ctx, b, P.w, (d, t) => { btn.textContent = `Rendering… ${d}/${t}`; });
+    await drawGuarma(ctx, b, P.w);
     drawTrail(ctx, b, P.w);
     await drawCartouche(ctx, b, P.w);
     const blob = await new Promise(res => canvas.toBlob(res, P.type, P.q));
@@ -1278,7 +1372,7 @@ panelToggle.addEventListener('click', () => {
   panelToggle.textContent = collapsed ? '▸' : '▾';
   panelToggle.title = collapsed ? 'Expand panel' : 'Collapse panel';
 });
-['f-cutscene', 'f-mission', 'f-free', 'f-orphan', 'f-bench', 'f-teleport', 'f-death'].forEach(id =>
+['f-cutscene', 'f-mission', 'f-free', 'f-orphan', 'f-bench', 'f-guarma', 'f-teleport', 'f-death'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => { if (lastData) render(lastData, false); }));
 document.querySelectorAll('#colormode button').forEach(b => b.addEventListener('click', () => {
   document.querySelectorAll('#colormode button').forEach(x => x.classList.toggle('on', x === b));

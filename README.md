@@ -143,7 +143,13 @@ rebuild and commit the refreshed `TrailMarker.asi` alongside your source change.
 - **femga/rdr3_discoveries** — the vehicle model list used to classify transport.
 - **Rockstar Games** — the in-game map tiles the web viewer draws on.
 - **Jean Ropke** — the coordinate transform/projection used by the web viewer to map
-  game positions onto those tiles (from the [RDR2 Collectors Map](https://jeanropke.github.io/RDR2CollectorsMap/)).
+  game positions onto those tiles (from the [RDR2 Collectors Map](https://jeanropke.github.io/RDR2CollectorsMap/)),
+  and the distributed tile pack the viewer's "Detailed" map style is hosted from.
+- **[RDR2Map](https://rdr2map.com/)** — the "Detailed" map art (roads, trails and railways drawn bold),
+  served from `viewer/tiles/detailed/`.
+- **[djrlincs_sharedmap](https://github.com/DJRLincs/djrlincs_sharedmap)** (MIT) — the in-game Guarma
+  map image used for the viewer's Guarma inset (`viewer/assets/guarma.webp`); the earlier notes
+  trace the same image to the Red Dead Wiki (`PartialGuarmaMapNEW`). Map art © Rockstar Games.
 - **Leaflet** (BSD-2-Clause) — the mapping library the web viewer is built on.
 - Built with **Claude** (Anthropic's AI) as a coding partner.
 
