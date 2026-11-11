@@ -65,6 +65,14 @@
   #pt-menu summary:focus-visible { outline: 2px solid #e8c25a; outline-offset: 2px; }
   #pt-options { margin-top: 4px; }
   #pt-options label { display: block; padding: 2px 0; cursor: pointer; user-select: none; color: #b3a982; }
+  #recent { margin-top: 6px; color: #b3a982; }
+  #recent label { cursor: pointer; user-select: none; }
+  #recent-n {
+    width: 3.6em; padding: 1px 3px; font: inherit; font-size: 12px;
+    background: #2a2c20; color: #e8e2d0; border: 1px solid #6b5d3e; border-radius: 3px;
+  }
+  #recent-n:focus-visible, #f-recent:focus-visible { outline: 2px solid #e8c25a; outline-offset: 1px; }
+  #recent-hint { margin-top: 2px; font-size: 12px; color: #b3a982; }
   #legend { display: none; color: #b3a982; }
   #legend span { display: inline-flex; align-items: center; margin: 2px 8px 2px 0; }
   #legend i { width: 11px; height: 11px; border-radius: 2px; margin-right: 4px; border: 1px solid #4a4128; box-sizing: border-box; }
@@ -169,6 +177,15 @@
           <summary id="pt-summary">Latest</summary>
           <div id="pt-options" role="group" aria-labelledby="pt-label"></div>
         </details>
+      </div>
+      <!-- Recent sessions: a session starts at every game launch or save load (each
+           segment_start). The log has no real-world clock, so a launch and a reload look alike. -->
+      <div id="recent">
+        <label><input type="checkbox" id="f-recent" aria-describedby="recent-hint"> Only the last</label>
+        <input type="number" id="recent-n" min="1" value="1" step="1" inputmode="numeric"
+               aria-label="Number of recent sessions to show" aria-describedby="recent-hint">
+        <span id="recent-unit">session</span>
+        <div id="recent-hint" aria-live="polite"></div>
       </div>
       <div class="filters">
         <div class="group-label">Show:</div>
@@ -496,8 +513,37 @@ function viewOf(data) {
     buildPlaythroughUI(data);
   }
   const { id, list } = data.pt;
-  if (data.ptSel.size === list.length) return data.recs;
-  return data.recs.filter((_, i) => data.ptSel.has(id[i]));
+  const recs = data.ptSel.size === list.length ? data.recs : data.recs.filter((_, i) => data.ptSel.has(id[i]));
+  return recentSessions(recs);
+}
+
+// "Only the last N sessions": keeps the tail of the view from the Nth-last session start.
+// A session starts at each segment_start (a game launch or a save load); benchmark runs
+// don't count as sessions. Keeping a whole tail means post-reload detection still sees every
+// later reload, so a branch undone inside the window stays hidden as usual.
+function recentSessions(recs) {
+  const bench = computeBenchmark(recs), starts = [];
+  for (let i = 0; i < recs.length; i++)
+    if ((i === 0 || (recs[i].flags & F_SEGMENT_START)) && !bench[i]) starts.push(i);
+  const nIn = document.getElementById('recent-n');
+  const on = document.getElementById('f-recent').checked && starts.length > 0;
+  const n = Math.min(Math.max(1, Math.floor(+nIn.value) || 1), starts.length || 1);
+  nIn.max = Math.max(1, starts.length);
+  document.getElementById('recent-unit').textContent = (+nIn.value === 1 ? 'session' : 'sessions');
+  const out = on ? recs.slice(starts[starts.length - n]) : recs;
+  const hint = document.getElementById('recent-hint');
+  if (on && out.length) {
+    let lo = Infinity, hi = -Infinity;
+    for (const r of out) { if (r.t < lo) lo = r.t; if (r.t > hi) hi = r.t; }
+    const fmt = t => { const [y, m, d] = civilFromDays(Math.floor(t / 86400) + DAYS_1800); return [`${MONTHS[m - 1]} ${d}`, y]; };
+    const [a, ya] = fmt(lo), [b, yb] = fmt(hi);
+    hint.textContent = `In-game ${a}${ya !== yb ? ', ' + ya : ''}${b !== a || ya !== yb ? ' to ' + b : ''}, ${yb}` +
+      (n < +nIn.value ? ` (all ${starts.length} sessions)` : '');
+  } else {
+    hint.textContent = `${starts.length.toLocaleString()} session${starts.length === 1 ? '' : 's'} so far. ` +
+      'Each game launch or save load starts one.';
+  }
+  return out;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -1372,6 +1418,17 @@ panelToggle.addEventListener('click', () => {
   panelToggle.textContent = collapsed ? '▸' : '▾';
   panelToggle.title = collapsed ? 'Expand panel' : 'Collapse panel';
 });
+// Recent sessions: the count is remembered per browser; the checkbox is not, so a fresh visit
+// always opens on the whole trail. Editing the count turns the filter on. Both re-fit the map.
+{ const cb = document.getElementById('f-recent'), nIn = document.getElementById('recent-n');
+  try { const v = parseInt(localStorage.getItem('tm-recent-n'), 10); if (v > 0) nIn.value = v; } catch (e) {}
+  cb.addEventListener('change', () => { if (lastData) render(lastData, true); });
+  nIn.addEventListener('change', () => {
+    const v = Math.max(1, Math.floor(+nIn.value) || 1); nIn.value = v;
+    try { localStorage.setItem('tm-recent-n', v); } catch (e) {}
+    cb.checked = true;
+    if (lastData) render(lastData, true);
+  }); }
 ['f-cutscene', 'f-mission', 'f-free', 'f-orphan', 'f-bench', 'f-guarma', 'f-teleport', 'f-death'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => { if (lastData) render(lastData, false); }));
 document.querySelectorAll('#colormode button').forEach(b => b.addEventListener('click', () => {

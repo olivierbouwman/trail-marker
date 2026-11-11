@@ -34,6 +34,11 @@ kind of point" and checked boxes add up: **cutscenes**, **mission travel**, **fr
 recorded while RDR2's built-in benchmark played). **Fast-travel jumps** and **death markers**
 draw over the visible trail, or over all real play when no trail box is checked.
 
+**Only the last N sessions** narrows everything (trail, title, replay, exports) to your most
+recent sessions, e.g. the one you just played. A session starts at every game launch or save
+load, since the log has no real-world clock to tell them apart; benchmark runs don't count. The
+number is remembered per browser; the checkbox starts off on each visit.
+
 **Guarma** is drawn as a framed inset in the empty sea at the bottom right of the map (and of
 the poster), using the in-game map of the walkable part of the island. It, and its checkbox
 under Show, only appear when the log has been there; unchecking it hides the island and its
